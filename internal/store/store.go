@@ -328,7 +328,7 @@ func (s *Store) ListProjectSkills(projectID string, includeDisabled bool) []mode
 	return s.querySkills(`SELECT `+skillCols+` FROM skills WHERE project_id=? AND enabled=1 `+skillOrder, projectID)
 }
 
-// ProjectMCP Skills = globals + that project's skills (enabled only unless asked).
+// ListProjectMCPSkills returns globals + that project's skills (enabled only unless asked).
 func (s *Store) ListProjectMCPSkills(projectID string, includeDisabled bool) []model.Skill {
 	if includeDisabled {
 		return s.querySkills(`SELECT `+skillCols+` FROM skills WHERE (scope='global' OR scope='') OR project_id=? ORDER BY scope DESC, sort_order, name`, projectID)
@@ -341,7 +341,7 @@ func (s *Store) ListSummaries() []model.SkillSummary {
 	return s.ListSummariesForProject("")
 }
 
-// ListSummariesForProject: "" = globals only; projectID = globals + that project.
+// ListSummariesForProject returns skill summaries; empty projectID means globals only, otherwise globals plus that project.
 func (s *Store) ListSummariesForProject(projectID string) []model.SkillSummary {
 	s.mu.Lock()
 	defer s.mu.Unlock()
