@@ -12,6 +12,7 @@ export interface Skill {
   projectSlug: string;
   projectName: string;
   enabled: boolean;
+  sortOrder: number;
   createdAt: string;
   updatedAt: string;
 }

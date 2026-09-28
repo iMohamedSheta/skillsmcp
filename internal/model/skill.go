@@ -24,8 +24,11 @@ type Skill struct {
 	ProjectSlug string `json:"projectSlug"`
 	ProjectName string `json:"projectName"`
 	Enabled     bool   `json:"enabled"`
-	CreatedAt   string `json:"createdAt"`
-	UpdatedAt   string `json:"updatedAt"`
+	// SortOrder is the manual position inside its scope group
+	// (globals / one project). Lower comes first; ties break by name.
+	SortOrder int    `json:"sortOrder"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
 }
 
 // SkillSummary is the lightweight index row for list_skills (no content).

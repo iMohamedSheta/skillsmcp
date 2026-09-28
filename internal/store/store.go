@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS skills(
 	scope TEXT NOT NULL DEFAULT 'global',
 	project_id TEXT NOT NULL DEFAULT '',
 	enabled INTEGER NOT NULL DEFAULT 1,
+	sort_order INTEGER NOT NULL DEFAULT 0,
 	created_at TEXT NOT NULL DEFAULT '',
 	updated_at TEXT NOT NULL DEFAULT ''
 );
@@ -137,8 +138,16 @@ func (s *Store) migrate() error {
 	for _, col := range []string{
 		`ALTER TABLE skills ADD COLUMN scope TEXT NOT NULL DEFAULT 'global'`,
 		`ALTER TABLE skills ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE skills ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`,
 	} {
 		_, _ = s.db.Exec(col)
+	}
+	// Backfill order for pre-order databases (every row is still 0):
+	// creation order (rowid). ReorderSkills always assigns >= 1,
+	// so MAX = 0 reliably means "never ordered".
+	var mx int
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(sort_order),0) FROM skills`).Scan(&mx); err == nil && mx == 0 {
+		_, _ = s.db.Exec(`UPDATE skills SET sort_order = rowid`)
 	}
 	for _, idx := range indexStmts {
 		_, _ = s.db.Exec(idx)
@@ -231,7 +240,10 @@ func ValidateProject(name, slug string) error {
 
 // ---- skills CRUD (scope-aware) ----
 
-const skillCols = `id,name,description,content,category,tags,scope,project_id,enabled,created_at,updated_at`
+const skillCols = `id,name,description,content,category,tags,scope,project_id,enabled,sort_order,created_at,updated_at`
+
+// skillOrder keeps manual positions first, name as deterministic tiebreak.
+const skillOrder = `ORDER BY sort_order, name`
 
 func scanSkill(row interface {
 	Scan(dest ...any) error
@@ -239,7 +251,7 @@ func scanSkill(row interface {
 	var x model.Skill
 	var en int
 	err := row.Scan(&x.ID, &x.Name, &x.Description, &x.Content, &x.Category, &x.Tags,
-		&x.Scope, &x.ProjectID, &en, &x.CreatedAt, &x.UpdatedAt)
+		&x.Scope, &x.ProjectID, &en, &x.SortOrder, &x.CreatedAt, &x.UpdatedAt)
 	x.Enabled = en == 1
 	if x.Scope == "" {
 		x.Scope = "global"
@@ -295,33 +307,33 @@ func (s *Store) querySkills(q string, args ...any) []model.Skill {
 // ListSkills returns ALL skills (any scope). Kept for the UI + compat.
 func (s *Store) ListSkills(includeDisabled bool) []model.Skill {
 	if includeDisabled {
-		return s.querySkills(`SELECT ` + skillCols + ` FROM skills ORDER BY name`)
+		return s.querySkills(`SELECT ` + skillCols + ` FROM skills ` + skillOrder)
 	}
-	return s.querySkills(`SELECT ` + skillCols + ` FROM skills WHERE enabled=1 ORDER BY name`)
+	return s.querySkills(`SELECT ` + skillCols + ` FROM skills WHERE enabled=1 ` + skillOrder)
 }
 
 // ListGlobalSkills returns enabled (or all) global skills for the MAIN MCP.
 func (s *Store) ListGlobalSkills(includeDisabled bool) []model.Skill {
 	if includeDisabled {
-		return s.querySkills(`SELECT ` + skillCols + ` FROM skills WHERE scope='global' OR scope='' ORDER BY name`)
+		return s.querySkills(`SELECT ` + skillCols + ` FROM skills WHERE scope='global' OR scope='' ` + skillOrder)
 	}
-	return s.querySkills(`SELECT ` + skillCols + ` FROM skills WHERE (scope='global' OR scope='') AND enabled=1 ORDER BY name`)
+	return s.querySkills(`SELECT ` + skillCols + ` FROM skills WHERE (scope='global' OR scope='') AND enabled=1 ` + skillOrder)
 }
 
 // ListProjectSkills returns a single project's skills.
 func (s *Store) ListProjectSkills(projectID string, includeDisabled bool) []model.Skill {
 	if includeDisabled {
-		return s.querySkills(`SELECT `+skillCols+` FROM skills WHERE project_id=? ORDER BY name`, projectID)
+		return s.querySkills(`SELECT `+skillCols+` FROM skills WHERE project_id=? `+skillOrder, projectID)
 	}
-	return s.querySkills(`SELECT `+skillCols+` FROM skills WHERE project_id=? AND enabled=1 ORDER BY name`, projectID)
+	return s.querySkills(`SELECT `+skillCols+` FROM skills WHERE project_id=? AND enabled=1 `+skillOrder, projectID)
 }
 
 // ProjectMCP Skills = globals + that project's skills (enabled only unless asked).
 func (s *Store) ListProjectMCPSkills(projectID string, includeDisabled bool) []model.Skill {
 	if includeDisabled {
-		return s.querySkills(`SELECT `+skillCols+` FROM skills WHERE (scope='global' OR scope='') OR project_id=? ORDER BY scope DESC, name`, projectID)
+		return s.querySkills(`SELECT `+skillCols+` FROM skills WHERE (scope='global' OR scope='') OR project_id=? ORDER BY scope DESC, sort_order, name`, projectID)
 	}
-	return s.querySkills(`SELECT `+skillCols+` FROM skills WHERE ((scope='global' OR scope='') OR project_id=?) AND enabled=1 ORDER BY scope DESC, name`, projectID)
+	return s.querySkills(`SELECT `+skillCols+` FROM skills WHERE ((scope='global' OR scope='') OR project_id=?) AND enabled=1 ORDER BY scope DESC, sort_order, name`, projectID)
 }
 
 // ListSummaries is the lightweight MAIN-MCP index: global skills only.
@@ -336,9 +348,9 @@ func (s *Store) ListSummariesForProject(projectID string) []model.SkillSummary {
 	var rows *sql.Rows
 	var err error
 	if projectID == "" {
-		rows, err = s.db.Query(`SELECT name,description,category,tags,scope,project_id,enabled,updated_at FROM skills WHERE (scope='global' OR scope='') AND enabled=1 ORDER BY name`)
+		rows, err = s.db.Query(`SELECT name,description,category,tags,scope,project_id,enabled,updated_at FROM skills WHERE (scope='global' OR scope='') AND enabled=1 ORDER BY sort_order, name`)
 	} else {
-		rows, err = s.db.Query(`SELECT name,description,category,tags,scope,project_id,enabled,updated_at FROM skills WHERE ((scope='global' OR scope='') OR project_id=?) AND enabled=1 ORDER BY name`, projectID)
+		rows, err = s.db.Query(`SELECT name,description,category,tags,scope,project_id,enabled,updated_at FROM skills WHERE ((scope='global' OR scope='') OR project_id=?) AND enabled=1 ORDER BY sort_order, name`, projectID)
 	}
 	if err != nil {
 		return nil
@@ -448,6 +460,8 @@ func (s *Store) CreateSkill(in SkillInput) (model.Skill, error) {
 		return model.Skill{}, err
 	}
 	now := Now()
+	var mx int
+	_ = s.db.QueryRow(`SELECT COALESCE(MAX(sort_order),0) FROM skills`).Scan(&mx)
 	x := model.Skill{
 		ID:          uuid.NewString(),
 		Name:        name,
@@ -458,12 +472,13 @@ func (s *Store) CreateSkill(in SkillInput) (model.Skill, error) {
 		Scope:       scope,
 		ProjectID:   pid,
 		Enabled:     true,
+		SortOrder:   mx + 1,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	_, err = s.db.Exec(`INSERT INTO skills(id,name,description,content,category,tags,scope,project_id,enabled,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-		x.ID, x.Name, x.Description, x.Content, x.Category, x.Tags, x.Scope, x.ProjectID, 1, x.CreatedAt, x.UpdatedAt)
+	_, err = s.db.Exec(`INSERT INTO skills(id,name,description,content,category,tags,scope,project_id,enabled,sort_order,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		x.ID, x.Name, x.Description, x.Content, x.Category, x.Tags, x.Scope, x.ProjectID, 1, x.SortOrder, x.CreatedAt, x.UpdatedAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return model.Skill{}, fmt.Errorf("skill %q already exists — pick another name or edit it", name)
@@ -555,7 +570,10 @@ func (s *Store) MoveSkill(id, scope, projectID string) (model.Skill, error) {
 	if err != nil {
 		return model.Skill{}, err
 	}
-	if _, err := s.db.Exec(`UPDATE skills SET scope=?,project_id=?,updated_at=? WHERE id=?`, sc, pid, Now(), id); err != nil {
+	// A moved skill lands at the end of its new group.
+	var mx int
+	_ = s.db.QueryRow(`SELECT COALESCE(MAX(sort_order),0) FROM skills`).Scan(&mx)
+	if _, err := s.db.Exec(`UPDATE skills SET scope=?,project_id=?,sort_order=?,updated_at=? WHERE id=?`, sc, pid, mx+1, Now(), id); err != nil {
 		return model.Skill{}, err
 	}
 	row := s.db.QueryRow(`SELECT `+skillCols+` FROM skills WHERE id=?`, id)
@@ -567,6 +585,27 @@ func (s *Store) MoveSkill(id, scope, projectID string) (model.Skill, error) {
 		_ = s.db.QueryRow(`SELECT slug,name FROM projects WHERE id=?`, x.ProjectID).Scan(&x.ProjectSlug, &x.ProjectName)
 	}
 	return x, nil
+}
+
+// ReorderSkills persists a manual order: ids[0] first.
+// Positions are 1-based; unknown ids are ignored.
+func (s *Store) ReorderSkills(ids []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for i, id := range ids {
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE skills SET sort_order=?,updated_at=? WHERE id=?`, i+1, Now(), id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // ---- projects ----
@@ -689,14 +728,23 @@ func (s *Store) UpdateProject(id string, in ProjectInput) (model.Project, error)
 	return p, err
 }
 
-// DeleteProject keeps its skills by converting them to global
-// (deleting knowledge silently would be worse than keeping it).
+// DeleteProject deletes the project AND all skills inside it
+// (a project is a hard boundary: its skills belong to it).
 func (s *Store) DeleteProject(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, _ = s.db.Exec(`UPDATE skills SET scope='global',project_id='',updated_at=? WHERE project_id=?`, Now(), id)
-	_, err := s.db.Exec(`DELETE FROM projects WHERE id=?`, id)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM skills WHERE project_id=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM projects WHERE id=?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) CountProjectSkills(projectID string) int {

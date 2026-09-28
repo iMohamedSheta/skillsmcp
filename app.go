@@ -121,6 +121,11 @@ func (a *App) MoveSkill(id string, scope string, projectID string) (model.Skill,
 	return a.store.MoveSkill(id, scope, projectID)
 }
 
+// ReorderSkills persists a manual card order (home grid drag-drop).
+func (a *App) ReorderSkills(ids []string) error {
+	return a.store.ReorderSkills(ids)
+}
+
 func (a *App) NormalizeName(raw string) string {
 	return store.NormalizeName(raw)
 }

@@ -1,0 +1,238 @@
+name: Release
+
+# Every push to main publishes a new version — but only if the shipped app
+# changed (Go code outside scripts/, frontend/, wails.json, go.mod/go.sum,
+# build/). Docs-only, CI/workflow, or script-only pushes are skipped and
+# batch up into the next app release instead.
+#   feat: / feat(scope):            -> minor bump (x.Y.0)
+#   fix:  / fix(scope):             -> patch bump (x.y.Z)
+#   "BREAKING CHANGE" or "type!:"   -> major bump (X.0.0)
+#   anything else (docs, chore...)  -> patch bump
+# Add "[skip release]" to the HEAD commit message to skip publishing.
+#
+# Cross-platform: the same version is built on three runners —
+#   Windows (windows/amd64 → SkillsMCP.exe)
+#   macOS   (darwin/universal → SkillsMCP.app, zipped)
+#   Linux   (linux/amd64 → SkillsMCP binary, tarballed)
+# Each build launches the app against a fresh isolated profile
+# (SKILLSMCP_HOME) — the default git-commit seed is the demo content —
+# and screenshots it; the Windows shot stays the README/release hero
+# (screenshot.png) and per-OS shots ship alongside it.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.version.outputs.skip }}
+      next: ${{ steps.version.outputs.next }}
+      bump: ${{ steps.version.outputs.bump }}
+      changelog: ${{ steps.version.outputs.changelog }}
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version from conventional commits
+        id: version
+        shell: pwsh
+        run: ./scripts/next-version.ps1
+
+  build:
+    needs: version
+    if: needs.version.outputs.skip != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows/amd64
+            out: SkillsMCP.exe
+            exe: build/bin/SkillsMCP.exe
+            asset: SkillsMCP-Windows-amd64.exe
+            shot: screenshot-windows.png
+          - os: macos-latest
+            platform: darwin/universal
+            out: SkillsMCP
+            exe: build/bin/SkillsMCP.app/Contents/MacOS/SkillsMCP
+            asset: SkillsMCP-macOS-universal.zip
+            shot: screenshot-macos.png
+          - os: ubuntu-latest
+            platform: linux/amd64
+            out: SkillsMCP
+            exe: build/bin/SkillsMCP
+            asset: SkillsMCP-Linux-amd64.tar.gz
+            shot: screenshot-linux.png
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Linux desktop deps (Wails/WebKit 4.1)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # Ubuntu 24.04 only ships webkit2gtk-4.1 (4.0 is gone) — Wails needs
+          # the 4.1 build tag (see Build step below).
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libvips-dev pkg-config xvfb scrot imagemagick gnome-screenshot
+          pkg-config --modversion webkit2gtk-4.1
+
+      - name: Install Wails CLI
+        shell: bash
+        run: |
+          set -e
+          # Module downloads + sumdb verification cross HTTP/2 — GitHub runners
+          # see transient INTERNAL_ERROR stream resets, so retry with backoff
+          # instead of failing the whole matrix on one flaky tile fetch.
+          for i in 1 2 3 4 5; do
+            if go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2; then
+              break
+            fi
+            if [ "$i" = 5 ]; then echo "wails install failed after 5 attempts" >&2; exit 1; fi
+            echo "wails install attempt $i failed — retrying in $((i * 15))s…"
+            sleep $((i * 15))
+          done
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build (${{ matrix.platform }})
+        shell: bash
+        run: |
+          # Windows needs the .exe in -o (otherwise it emits a bare `SkillsMCP`
+          # with no extension and the stage step finds nothing). Linux on
+          # Ubuntu 24.04 needs -tags webkit2_41 to match libwebkit2gtk-4.1.
+          EXTRA_TAGS=""
+          if [ "$RUNNER_OS" = "Linux" ]; then EXTRA_TAGS="-tags webkit2_41"; fi
+          # shellcheck disable=SC2086
+          wails build -platform ${{ matrix.platform }} -o "${{ matrix.out }}" $EXTRA_TAGS -ldflags "-X skillsmcp/internal/version.Version=${{ needs.version.outputs.next }}"
+          echo "--- build/bin ---"
+          ls -la build/bin/
+        env:
+          RUNNER_OS: ${{ runner.os }}
+
+      # ---- screenshots (fresh profile, seeded defaults, never real data) ----
+      - name: Screenshot the running app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          ./scripts/screenshot.ps1 -ExePath "build/bin/SkillsMCP.exe" `
+            -OutFile "${{ matrix.shot }}"
+
+      - name: Screenshot the running app (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        continue-on-error: true
+        run: |
+          chmod +x scripts/screenshot.sh
+          ./scripts/screenshot.sh --exe "build/bin/SkillsMCP.app/Contents/MacOS/SkillsMCP" --out "${{ matrix.shot }}"
+
+      - name: Screenshot the running app (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        continue-on-error: true
+        run: |
+          chmod +x scripts/screenshot.sh
+          xvfb-run -a ./scripts/screenshot.sh --exe "build/bin/SkillsMCP" --out "${{ matrix.shot }}"
+
+      - name: Stage release assets
+        shell: bash
+        run: |
+          set -e
+          mkdir -p dist
+          echo "--- expecting: ${{ matrix.exe }} ---"
+          ls -la build/bin/ || true
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            if [ ! -f "${{ matrix.exe }}" ]; then echo "MISSING ${{ matrix.exe }} — wails emitted:"; ls -la build/bin/; exit 1; fi
+            cp "${{ matrix.exe }}" "dist/${{ matrix.asset }}"
+            cp "${{ matrix.exe }}" dist/SkillsMCP.exe
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            if [ ! -d build/bin/SkillsMCP.app ]; then echo "MISSING build/bin/SkillsMCP.app:"; ls -la build/bin/; exit 1; fi
+            ditto -c -k --sequesterRsrc --keepParent build/bin/SkillsMCP.app "dist/${{ matrix.asset }}"
+          else
+            if [ ! -f "${{ matrix.exe }}" ]; then echo "MISSING ${{ matrix.exe }}:"; ls -la build/bin/; exit 1; fi
+            tar -czf "dist/${{ matrix.asset }}" -C build/bin SkillsMCP
+          fi
+          if [ -f "${{ matrix.shot }}" ]; then cp "${{ matrix.shot }}" dist/; fi
+          ls -la dist/
+        env:
+          RUNNER_OS: ${{ runner.os }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ runner.os }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [version, build]
+    if: needs.version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Promote Windows shot to release hero
+        shell: bash
+        run: |
+          ls -la dist/
+          if [ -f dist/screenshot-windows.png ]; then cp dist/screenshot-windows.png dist/screenshot.png; fi
+          ls -la dist/
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.next }}
+          name: ${{ needs.version.outputs.next }}
+          body: |
+            ## What's changed (${{ needs.version.outputs.bump }})
+
+            ${{ needs.version.outputs.changelog }}
+
+            ---
+
+            ![SkillsMCP app screenshot](https://github.com/${{ github.repository }}/releases/download/${{ needs.version.outputs.next }}/screenshot.png)
+
+            **Download for your OS:**
+
+            | OS | File | Notes |
+            |---|---|---|
+            | Windows 10/11 (x64) | `SkillsMCP-Windows-amd64.exe` (`SkillsMCP.exe` is the same file) | Single file, no installer, no DLLs. Double-click to run. |
+            | macOS (Universal: Intel + Apple Silicon) | `SkillsMCP-macOS-universal.zip` | Unzip, drag `SkillsMCP.app` to Applications, right-click → Open on first launch (unsigned build). `SkillsMCP mcp` speaks stdio for opencode. |
+            | Linux (x64) | `SkillsMCP-Linux-amd64.tar.gz` | Extract and run `./SkillsMCP`. Needs WebKitGTK on minimal distros (`libwebkit2gtk-4.1`). |
+
+            Data lives in `~/.skillsmcp/skills.db` on every OS (`%USERPROFILE%\.skillsmcp` on Windows).
+            Screenshots are seeded defaults (`screenshot-windows/macos/linux.png`) — never real skills.
+          files: dist/*

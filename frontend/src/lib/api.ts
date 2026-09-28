@@ -1,5 +1,20 @@
 import type { Project, ProjectInput, Skill, SkillInput } from './types';
 
+export interface UpdateInfo {
+  currentVersion: string;
+  latestVersion: string;
+  releaseName: string;
+  notes: string;
+  pageUrl: string;
+  assetName: string;
+  downloadUrl: string;
+  size: number;
+  publishedAt: string;
+  updateAvailable: boolean;
+  canInstall: boolean;
+  platform: string;
+}
+
 // Wails binding shim.
 // Inside the desktop app every call hits the REAL Go backend.
 // The in-memory mocks below run ONLY in `npm run dev` (no window.go).
@@ -56,6 +71,7 @@ let mem: Skill[] = [
     tags: 'git,commit,conventional-commits',
     scope: 'global', projectId: '', projectSlug: '', projectName: '',
     enabled: true,
+    sortOrder: 1,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   },
@@ -68,6 +84,7 @@ let mem: Skill[] = [
     tags: 'demo',
     scope: 'project', projectId: 'p-demo', projectSlug: 'demo-app', projectName: 'Demo App',
     enabled: true,
+    sortOrder: 2,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   },
@@ -79,7 +96,8 @@ const normSlug = (s: string) => s.toLowerCase().trim().replace(/[\s_]+/g, '-').r
 export const api = {
   Version: binding('Version', async (): Promise<string> => 'dev'),
   StorePath: binding('StorePath', async (): Promise<string> => '~/.skillsmcp/skills.db (SQLite WAL)'),
-  ListSkills: binding('ListSkills', async (): Promise<Skill[]> => [...mem]),
+  ListSkills: binding('ListSkills', async (): Promise<Skill[]> =>
+    [...mem].sort((a, b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name))),
   GetSkill: binding('GetSkill', async (name: string): Promise<Skill> => {
     const s = mem.find((x) => x.name === name);
     if (!s) throw new Error(`unknown skill "${name}"`);
@@ -91,10 +109,12 @@ export const api = {
     const scope = input.scope === 'project' ? 'project' : 'global';
     const pid = scope === 'project' ? input.projectId : '';
     const proj = memProjects.find((p) => p.id === pid);
+    const mx = mem.reduce((m, x) => Math.max(m, x.sortOrder || 0), 0);
     const s: Skill = {
       ...input, name, scope, projectId: pid,
       projectSlug: proj?.slug || '', projectName: proj?.name || '',
       id: rnd(10), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), enabled: input.enabled ?? true,
+      sortOrder: mx + 1,
     };
     mem.push(s);
     return s;
@@ -132,8 +152,20 @@ export const api = {
     } else {
       s.scope = 'global'; s.projectId = ''; s.projectSlug = ''; s.projectName = '';
     }
+    const mx = mem.reduce((m, x) => Math.max(m, x.sortOrder || 0), 0);
+    s.sortOrder = mx + 1;
     s.updatedAt = new Date().toISOString();
     return s;
+  }),
+  ReorderSkills: binding('ReorderSkills', async (ids: string[]): Promise<void> => {
+    const pos = new Map(ids.map((id, i) => [id, i + 1]));
+    for (const s of mem) {
+      const p = pos.get(s.id);
+      if (p !== undefined) {
+        s.sortOrder = p;
+        s.updatedAt = new Date().toISOString();
+      }
+    }
   }),
   NormalizeName: binding('NormalizeName', async (raw: string): Promise<string> =>
     raw.toLowerCase().trim().replace(/[\s_]+/g, '-').replace(/[^a-z0-9-]/g, '').replace(/^-+|-+$/g, '').slice(0, 64)),
@@ -154,12 +186,13 @@ export const api = {
   }),
   DeleteProject: binding('DeleteProject', async (id: string): Promise<void> => {
     memProjects = memProjects.filter((p) => p.id !== id);
-    mem = mem.map((s) => (s.projectId === id ? { ...s, scope: 'global' as const, projectId: '', projectSlug: '', projectName: '' } : s));
+    mem = mem.filter((s) => s.projectId !== id);
   }),
   ProjectSkillCount: binding('ProjectSkillCount', async (id: string): Promise<number> => mem.filter((s) => s.projectId === id).length),
   GetSettings: binding('GetSettings', async (): Promise<Record<string, string>> => ({})),
   SetSetting: binding('SetSetting', async (): Promise<void> => {}),
   GetLogs: binding('GetLogs', async (): Promise<string[]> => ['(web-dev mock) skillsmcp started']),
+  LogPath: binding('LogPath', async (): Promise<string> => '~/.skillsmcp/skillsmcp.log'),
   ClearLogs: binding('ClearLogs', async (): Promise<void> => {}),
   MCPStatus: binding('MCPStatus', async (): Promise<any> => ({ running: false, url: 'http://127.0.0.1:9423' })),
   StartMCP: binding('StartMCP', async (): Promise<string> => 'http://127.0.0.1:9423'),
@@ -184,4 +217,12 @@ export const api = {
   TestMCP: binding('TestMCP', async (): Promise<string> =>
     'stdio msg 1 → {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",...}}\ntools/list → 200 (web-dev mock)'),
   TestProjectMCP: binding('TestProjectMCP', async (slug: string): Promise<string> => `(web-dev mock) project MCP skillsmcp-${slug} OK`),
+  CheckForUpdates: binding('CheckForUpdates', async (): Promise<UpdateInfo> => ({
+    currentVersion: 'dev', latestVersion: 'dev', releaseName: '', notes: '',
+    pageUrl: '', assetName: '', downloadUrl: '', size: 0, publishedAt: '',
+    updateAvailable: false, canInstall: false, platform: 'web',
+  })),
+  SkipUpdateVersion: binding('SkipUpdateVersion', async (): Promise<void> => {}),
+  OpenReleasePage: binding('OpenReleasePage', async (): Promise<string> => ''),
+  DownloadAndInstallUpdate: binding('DownloadAndInstallUpdate', async (): Promise<string> => 'web-dev mock: no updater here'),
 };

@@ -76,16 +76,19 @@ func TestProjectScope(t *testing.T) {
 		t.Fatalf("project skills = %+v", only)
 	}
 
-	// delete project keeps skills as global
+	// delete project deletes its skills too
 	if err := s.DeleteProject(p.ID); err != nil {
 		t.Fatalf("delete project: %v", err)
 	}
-	sk, ok := s.GetSkill("demo-deploy")
-	if !ok {
-		t.Fatal("project skill vanished on project delete")
+	if _, ok := s.GetSkill("demo-deploy"); ok {
+		t.Fatal("project skill survived project delete")
 	}
-	if sk.Scope != "global" || sk.ProjectID != "" {
-		t.Fatalf("after delete scope = %+v", sk)
+	if _, ok := s.GetProject(p.ID); ok {
+		t.Fatal("project survived delete")
+	}
+	// globals are untouched
+	if _, ok := s.GetSkill("git-commit"); !ok {
+		t.Fatal("global git-commit vanished on project delete")
 	}
 }
 

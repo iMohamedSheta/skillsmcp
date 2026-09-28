@@ -1,8 +1,25 @@
-build/bin/
-frontend/dist/
+.DS_Store
+Thumbs.db
+node_modules/
 frontend/node_modules/
-frontend/wailsjs/go/
+frontend/dist/
+build/bin/
 *.exe
-*.db
-*.db-wal
-*.db-shm
+.skillsmcp-tmp/
+
+# Go build/test artifacts
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Env + logs
+.env
+.env*.local
+*.log
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo

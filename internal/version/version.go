@@ -1,4 +1,9 @@
+// Package version carries the release tag baked in at build time:
+//
+//	wails build -ldflags "-X skillsmcp/internal/version.Version=v1.2.3"
+//
+// Local builds report "dev".
 package version
 
-// Version is baked in via ldflags at release time ("dev" for local builds).
+// Version is overwritten by release builds via -ldflags.
 var Version = "dev"

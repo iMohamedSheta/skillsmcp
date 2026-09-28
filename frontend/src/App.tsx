@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   LayoutGrid, BookOpen, FolderKanban, Plus, Search, Plug2, RefreshCw, Trash2, Copy, Check,
   Upload, Power, ScrollText, Pencil, FlaskConical, Globe,
   ChevronDown, ChevronRight, FolderPlus,
 } from 'lucide-react';
-import { api } from './lib/api';
+import { api, type UpdateInfo } from './lib/api';
 import type { Project, ProjectInput, Skill, SkillInput } from './lib/types';
 import { applyAppearance, loadLocalAppearance, mergeSettingsMap, saveLocalAppearance, type Appearance } from './lib/appearance';
 import Menubar from './components/Menu';
 import SettingsSheet from './components/SettingsSheet';
+import UpdateBanner from './components/UpdateBanner';
 import McpPanel from './components/McpPanel';
 import SkillSheet, { EMPTY_SKILL } from './components/SkillSheet';
 import ImportSheet from './components/ImportSheet';
@@ -31,12 +32,22 @@ export default function App() {
   const [preview, setPreview] = useState('');
   const [storePath, setStorePath] = useState('');
   const [version, setVersion] = useState('dev');
+  // self-update via GitHub Releases
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [updateBanner, setUpdateBanner] = useState(false);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateMsg, setUpdateMsg] = useState('');
+  const [updateProgress, setUpdateProgress] = useState<{ written: number; total: number } | null>(null);
+  const updateChecked = useRef(false);
   const [appearance, setAppearance] = useState<Appearance>(() => loadLocalAppearance());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sideOpen, setSideOpen] = useState(true);
   const [confirm, setConfirm] = useState<{ title: string; body: string; confirmLabel: string; action: () => Promise<void> } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
+  const [logPath, setLogPath] = useState('');
+  const [mcpConfig, setMcpConfig] = useState('');
   const [copied, setCopied] = useState(false);
   const [err, setErr] = useState('');
   // sidebar drag-drop (ReadGate-style): skill id being dragged + drop target id
@@ -98,6 +109,7 @@ export default function App() {
       setMcpUrl(m?.url || 'http://127.0.0.1:9423');
       setPreview(String(await api.MCPToolsPreview()));
       setStorePath(String(await api.StorePath()));
+      try { setMcpConfig(String(await api.OpencodeConfig())); } catch {}
     } catch (e: any) {
       setErr(e?.message || String(e));
     }
@@ -117,6 +129,7 @@ export default function App() {
     }).catch(() => {});
   }, []);
   useEffect(() => { if (tab === 'logs') reloadLogs(); }, [tab ]);
+  useEffect(() => { if (settingsOpen) reloadLogs(); }, [settingsOpen ]);
 
   function patchAppearance(p: Partial<Appearance>) {
     setAppearance((prev) => {
@@ -132,7 +145,110 @@ export default function App() {
   async function reloadLogs() {
     try {
       setLogs(((await api.GetLogs(200)) as unknown as string[]) || []);
+      setLogPath(String(await (api as any).LogPath()));
     } catch {}
+  }
+
+  async function clearLogs() {
+    try {
+      await api.ClearLogs();
+      setLogs([]);
+    } catch {}
+  }
+
+  // ---------- self-update via GitHub Releases ----------
+  async function runUpdateCheck(manual: boolean) {
+    if (updateChecking) return null;
+    setUpdateChecking(true);
+    if (manual) setUpdateMsg('');
+    try {
+      const info = (await api.CheckForUpdates()) as unknown as UpdateInfo;
+      setUpdateInfo(info);
+      if (info?.updateAvailable) {
+        // honor "skip this version" for automatic popups, never for manual checks
+        if (!manual) {
+          try {
+            const m = (await api.GetSettings()) as unknown as Record<string, string>;
+            if (m?.['update.skipVersion'] === info.latestVersion) return info;
+          } catch {}
+        }
+        setUpdateBanner(true);
+      } else if (manual) {
+        setUpdateMsg(`You're on the latest version (${info?.currentVersion || version}).`);
+      }
+      return info;
+    } catch (e: any) {
+      if (manual) setUpdateMsg('update check failed: ' + (e?.message || String(e)));
+      return null;
+    } finally {
+      setUpdateChecking(false);
+    }
+  }
+
+  // One automatic check per session, shortly after startup. Manual checks
+  // (Settings → General → Updates) always hit the network. Auto checks are
+  // throttled to once per 24h and skipped when the user disabled them.
+  useEffect(() => {
+    if (updateChecked.current) return;
+    updateChecked.current = true;
+    const h = setTimeout(async () => {
+      try {
+        const m = (await api.GetSettings()) as unknown as Record<string, string>;
+        if (m?.['update.autoCheck'] === 'off') return;
+        const last = Date.parse(m?.['update.lastCheck'] || '');
+        if (Number.isFinite(last) && Date.now() - last < 24 * 3600 * 1000) return;
+      } catch {}
+      runUpdateCheck(false).catch(() => {});
+    }, 4000);
+    return () => clearTimeout(h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Download progress comes from the Go updater via Wails events
+  // (window.runtime exists only inside the desktop webview — no-op in web dev).
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    try {
+      const rt = (window as any).runtime;
+      if (rt?.EventsOn) off = rt.EventsOn('update:progress', (p: any) => {
+        const d = Array.isArray(p) ? p[0] : p;
+        if (d && typeof d.written === 'number') setUpdateProgress({ written: d.written, total: d.total || 0 });
+      });
+    } catch {}
+    return () => { try { off?.(); } catch {} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function installUpdate() {
+    if (updateBusy) return;
+    setUpdateBusy(true);
+    setUpdateProgress(null);
+    setUpdateMsg('');
+    try {
+      const msg = String(await api.DownloadAndInstallUpdate());
+      setUpdateMsg(msg);
+    } catch (e: any) {
+      setUpdateMsg('update failed: ' + (e?.message || String(e)));
+    } finally {
+      setUpdateBusy(false);
+      setUpdateProgress(null);
+    }
+  }
+
+  async function skipUpdateVersion() {
+    if (updateInfo?.latestVersion) {
+      try { await api.SkipUpdateVersion(updateInfo.latestVersion); } catch {}
+    }
+    setUpdateBanner(false);
+  }
+
+  async function openReleasePage() {
+    try {
+      const err = String(await api.OpenReleasePage(updateInfo?.pageUrl || ''));
+      if (err) setUpdateMsg(err);
+    } catch (e: any) {
+      setUpdateMsg('could not open release page: ' + (e?.message || String(e)));
+    }
   }
 
   // Skill navigation: clicking a skill focuses it and opens the Skill tab
@@ -193,7 +309,8 @@ export default function App() {
       list = list.filter((s) => s.projectId === pid);
     }
     if (q) list = list.filter((s) => (s.name + ' ' + s.description + ' ' + s.category + ' ' + s.tags + ' ' + s.projectName).toLowerCase().includes(q));
-    return [...list].sort((a, b) => a.name.localeCompare(b.name));
+    // Backend returns sort_order — preserve it (manual drag order, name tiebreak).
+    return list;
   }, [skills, query, homeFilter]);
 
   const enabledCount = skills.filter((s) => s.enabled).length;
@@ -209,14 +326,32 @@ export default function App() {
     const proj = projects.find((p) => p.id === s.projectId);
     return (
       <Card key={s.id} draggable
+        title="Drag onto another card to reorder (moves scope too when dropped on another group)"
         onDragStart={(e) => {
           e.dataTransfer.setData('text/skillsmcp-skill', s.id);
           e.dataTransfer.effectAllowed = 'move';
           setDragSkill(s.id);
         }}
         onDragEnd={() => { setDragSkill(null); setDropTarget(null); }}
-        className={cn('flex cursor-grab flex-col overflow-hidden active:cursor-grabbing', dragSkill === s.id && 'opacity-40')}>
-        {s.scope === 'project' && <div className="h-1" style={{ background: proj?.color || '#6366f1' }} />}
+        onDragOver={(e) => {
+          if (dragSkill && dragSkill !== s.id) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            setDropTarget(`order:${s.id}`);
+          }
+        }}
+        onDragLeave={() => setDropTarget((t) => (t === `order:${s.id}` ? null : t))}
+        onDrop={(e) => {
+          e.preventDefault();
+          const sid = e.dataTransfer.getData('text/skillsmcp-skill') || dragSkill;
+          setDropTarget(null);
+          setDragSkill(null);
+          if (sid && sid !== s.id) void reorderSkill(sid, s.id);
+        }}
+        className={cn('flex cursor-grab flex-col active:cursor-grabbing',
+          dragSkill === s.id && 'opacity-40',
+          dropTarget === `order:${s.id}` && 'outline outline-1 outline-emerald-500/60')}>
+        {s.scope === 'project' && <div className="h-1 rounded-t-xl" style={{ background: proj?.color || '#6366f1' }} />}
         <div className="flex flex-1 flex-col gap-1.5 p-3">
           <div className="flex items-start gap-1.5">
             <span className={cn('mt-1.5 h-2 w-2 shrink-0 rounded-full', s.enabled ? 'bg-emerald-400' : 'bg-zinc-600')} />
@@ -264,6 +399,30 @@ export default function App() {
     try {
       await api.MoveSkill(skillId, scope, projectId);
       await refresh(skillId);
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    }
+  }
+
+  // Home-grid drop on a card: insert the dragged skill right before the
+  // target card. Dropping across groups also moves scope (then positions).
+  async function reorderSkill(draggedId: string, targetId: string) {
+    const dragged = skills.find((x) => x.id === draggedId);
+    const target = skills.find((x) => x.id === targetId);
+    if (!dragged || !target || draggedId === targetId) return;
+    try {
+      const tScope = target.scope === 'project' ? 'project' : 'global';
+      const tPid = target.scope === 'project' ? target.projectId : '';
+      const dScope = dragged.scope === 'project' ? 'project' : 'global';
+      const dPid = dragged.scope === 'project' ? dragged.projectId : '';
+      if (tScope !== dScope || tPid !== dPid) {
+        await api.MoveSkill(draggedId, tScope, tPid);
+      }
+      const order = skills.map((s) => s.id).filter((id) => id !== draggedId);
+      const at = order.indexOf(targetId);
+      order.splice(at < 0 ? order.length : at, 0, draggedId);
+      await api.ReorderSkills(order);
+      await refresh(draggedId);
     } catch (e: any) {
       setErr(e?.message || String(e));
     }
@@ -342,6 +501,11 @@ export default function App() {
     <div className="flex h-full flex-col bg-zinc-950 text-zinc-200">
       <Menubar tab={tab} onTab={setTab} onAdd={() => openNewSkill()} onCopyMCP={copyMCP}
         onOpenSettings={() => setSettingsOpen(true)} onToggleSidebar={() => setSideOpen((v) => !v)} />
+      {updateBanner && updateInfo?.updateAvailable && (
+        <UpdateBanner info={updateInfo} busy={updateBusy} progress={updateProgress}
+          onInstall={installUpdate} onNotes={openReleasePage}
+          onLater={() => setUpdateBanner(false)} onSkip={skipUpdateVersion} />
+      )}
 
       <div className="flex min-h-0 flex-1">
         {sideOpen && (
@@ -523,6 +687,41 @@ export default function App() {
                 {filtered.length === 0 ? (
                   <Empty icon={<BookOpen size={22} />} title="No skills here yet"
                     hint="Create a global skill (main MCP) or a project skill (that project's own MCP) with New Skill." />
+                ) : homeFilter === 'all' ? (
+                  <div className="grid gap-5">
+                    {(() => {
+                      const g = filtered.filter((s) => s.scope !== 'project');
+                      return g.length > 0 && (
+                        <section>
+                          <div className="mb-1.5 flex items-center gap-1.5 px-0.5">
+                            <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                            <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">Global</span>
+                            <span className="font-mono text-[10px] text-zinc-600">{g.length} · main MCP</span>
+                          </div>
+                          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                            {g.map(skillCard)}
+                          </div>
+                        </section>
+                      );
+                    })()}
+                    {projects.map((p) => {
+                      const list = filtered.filter((s) => s.projectId === p.id);
+                      if (list.length === 0) return null;
+                      return (
+                        <section key={p.id}>
+                          <button onClick={() => setHomeFilter(`project:${p.id}`)} title={`Show only ${p.slug}`}
+                            className="mb-1.5 flex items-center gap-1.5 rounded-md px-0.5 text-left hover:opacity-80">
+                            <span className="h-2 w-2 rounded-full" style={{ background: p.color || '#6366f1' }} />
+                            <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">{p.slug}</span>
+                            <span className="font-mono text-[10px] text-zinc-600">{list.length} · project MCP</span>
+                          </button>
+                          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                            {list.map(skillCard)}
+                          </div>
+                        </section>
+                      );
+                    })}
+                  </div>
                 ) : (
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     {filtered.map(skillCard)}
@@ -637,10 +836,10 @@ export default function App() {
                                 onClick={() => setProjectSheet({ open: true, editing: p, initial: { name: p.name, slug: p.slug, description: p.description, color: p.color } })}>
                                 <Pencil size={11} /> Edit
                               </Button>
-                              <IconBtn title={`Delete ${p.slug}`} tip="Delete project (skills become global)" size="sm" className="ml-auto hover:!text-red-300"
+                              <IconBtn title={`Delete ${p.slug}`} tip="Delete project + its skills" size="sm" className="ml-auto hover:!text-red-300"
                                 onClick={() => setConfirm({
                                   title: `Delete project "${p.name}"?`,
-                                  body: `${pskills.length} project skill(s) become GLOBAL (kept, not deleted). Its MCP skillsmcp-${p.slug} stops working.`,
+                                  body: `${pskills.length} project skill(s) will be DELETED with it. Globals are kept. Its MCP skillsmcp-${p.slug} stops working. This cannot be undone.`,
                                   confirmLabel: 'Delete project',
                                   action: async () => { await api.DeleteProject(p.id); await refresh(); },
                                 })}>
@@ -701,7 +900,13 @@ export default function App() {
       </div>
 
       <SettingsSheet open={settingsOpen} onClose={() => setSettingsOpen(false)}
-        appearance={appearance} onPatch={patchAppearance} storePath={storePath} version={version} />
+        appearance={appearance} onPatch={patchAppearance} storePath={storePath}
+        counts={{ skills: skills.length, projects: projects.length, enabled: skills.filter((s) => s.enabled).length }}
+        mcpUrl={mcpUrl} mcpConfig={mcpConfig} logs={logs} logPath={logPath}
+        onReloadLogs={reloadLogs} onClearLogs={clearLogs} version={version}
+        updateInfo={updateInfo} updateChecking={updateChecking} updateBusy={updateBusy}
+        updateMsg={updateMsg} onCheckUpdates={() => runUpdateCheck(true)}
+        onInstallUpdate={installUpdate} onOpenRelease={openReleasePage} />
 
       <SkillSheet open={skillSheet.open} onClose={() => setSkillSheet((s) => ({ ...s, open: false }))}
         initial={skillSheet.initial} editing={skillSheet.editing} projects={projects}

@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Go tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Fresh checkouts have no frontend/dist (gitignored build output), but
+      # main.go embeds it — so seed a placeholder before build/vet/test.
+      # (Real builds via `wails build` replace it with the compiled frontend.)
+      - name: Prepare embed dir
+        run: mkdir -p frontend/dist && touch frontend/dist/gitkeep
+
+      - name: Build
+        run: go build ./...
+
+      - name: Tests
+        run: go test ./... -count=1
+
+      - name: Vet (static analysis)
+        run: go vet ./...
+
+      - name: Staticcheck (deep static analysis + style lint)
+        if: runner.os == 'Windows'
+        run: |
+          set -e
+          # Same transient sumdb/proxy flakes as the release workflow — retry.
+          for i in 1 2 3 4 5; do
+            if go install honnef.co/go/tools/cmd/staticcheck@latest; then
+              break
+            fi
+            if [ "$i" = 5 ]; then echo "staticcheck install failed after 5 attempts" >&2; exit 1; fi
+            echo "staticcheck install attempt $i failed — retrying in $((i * 15))s…"
+            sleep $((i * 15))
+          done
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Staticcheck — bug detection
+        if: runner.os == 'Windows'
+        run: staticcheck ./...
+
+      - name: Style lint
+        if: runner.os == 'Windows'
+        run: staticcheck -checks "all" ./...
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Check no hardcoded local paths leak
+        run: |
+          set -e
+          if grep -rn "E:\\\\laragon\|C:\\\\Users\\\\MohamedSheta" frontend/src/; then
+            echo "Hardcoded local path found in frontend — use portable defaults." >&2
+            exit 1
+          fi
+
+  screenshot-scripts:
+    name: Screenshot scripts lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Shellcheck + pwsh syntax
+        run: |
+          set -e
+          bash -n scripts/screenshot.sh
+          command -v shellcheck >/dev/null && shellcheck -S warning scripts/screenshot.sh || echo "(shellcheck not installed — bash -n passed)"
+          test -f scripts/screenshot.ps1

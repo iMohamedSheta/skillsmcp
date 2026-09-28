@@ -1,103 +1,315 @@
-import { useState } from 'react';
-import { Palette, Sun, Moon, Check } from 'lucide-react';
-import { Sheet, Button } from './ui';
-import { ACCENTS, type Appearance } from '../lib/appearance';
+import { useEffect, useState } from 'react';
+import { ArrowDownToLine, Check, Copy, Database, ExternalLink, FileText, Layers, Loader2, Moon, Sun, Palette, Plug2, RefreshCw, RotateCcw, Square, Trash2, Type, SlidersHorizontal } from 'lucide-react';
+import { ACCENTS, DEFAULT_APPEARANCE, FONT_SIZES, type Appearance } from '../lib/appearance';
 import { cn } from '../lib/cn';
+import { api, type UpdateInfo } from '../lib/api';
+import { Badge, Button, IconBtn, Sheet } from './ui';
 
-export default function SettingsSheet({ open, onClose, appearance, onPatch, storePath, version }: {
-  open: boolean; onClose: () => void;
-  appearance: Appearance; onPatch: (p: Partial<Appearance>) => void;
-  storePath: string; version: string;
+function Sub({ children }: { children: React.ReactNode }) {
+  return <div className="mb-1 mt-3 text-[11px] font-medium uppercase tracking-wider text-zinc-500 first:mt-0">{children}</div>;
+}
+
+function Seg<T extends string>({ options, value, onPick }: {
+  options: { value: T; label: string; icon?: any }[]; value: string; onPick: (v: T) => void;
 }) {
-  const [tab, setTab] = useState<'appearance' | 'data'>('appearance');
   return (
-    <Sheet open={open} onClose={onClose} title="Settings" subtitle={`SkillsMCP ${version} · personal skill library`}>
-      <div className="p-4">
-        <div className="mb-3 flex gap-1 rounded-lg border border-zinc-800 bg-zinc-900 p-1">
-          {(['appearance', 'data'] as const).map((t) => (
-            <button key={t} onClick={() => setTab(t)}
-              className={cn('flex-1 rounded-md px-3 py-1.5 text-xs capitalize',
-                tab === t ? 'bg-zinc-700/60 text-white' : 'text-zinc-400 hover:text-zinc-100')}>
-              {t}
+    <div className="inline-flex flex-wrap gap-1 rounded-xl border border-zinc-800 bg-zinc-950 p-1">
+      {options.map((o) => (
+        <button key={o.value} type="button" onClick={() => onPick(o.value)}
+          className={cn('flex cursor-pointer select-none items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors [&_svg]:pointer-events-none',
+            value === o.value ? 'bg-zinc-800 text-zinc-50 shadow-sm' : 'text-zinc-500 hover:text-zinc-200')}>
+          {o.icon && <o.icon size={13} />}
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Section({ icon: Icon, title, children }: { icon: any; title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3.5">
+      <div className="mb-2.5 flex items-center gap-2 text-[13px] font-semibold text-zinc-100">
+        <Icon size={15} className="acc-text" />
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Switch({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  return (
+    <button type="button" onClick={onToggle}
+      className={cn('relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors', on ? 'acc-bg' : 'bg-zinc-700')}>
+      <span className={cn('absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all', on ? 'end-0.5' : 'start-0.5')} />
+    </button>
+  );
+}
+
+export default function SettingsSheet({ open, onClose, appearance, onPatch, storePath, counts, mcpUrl, mcpConfig, logs, logPath, onReloadLogs, onClearLogs, version, updateInfo, updateChecking, updateBusy, updateMsg, onCheckUpdates, onInstallUpdate, onOpenRelease }: {
+  open: boolean;
+  onClose: () => void;
+  appearance: Appearance;
+  onPatch: (p: Partial<Appearance>) => void;
+  storePath: string;
+  counts: { skills: number; projects: number; enabled: number };
+  mcpUrl: string;
+  mcpConfig: string;
+  logs: string[];
+  logPath: string;
+  onReloadLogs: () => void;
+  onClearLogs: () => void;
+  version?: string;
+  updateInfo?: UpdateInfo | null;
+  updateChecking?: boolean;
+  updateBusy?: boolean;
+  updateMsg?: string;
+  onCheckUpdates?: () => void;
+  onInstallUpdate?: () => void;
+  onOpenRelease?: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const [stab, setStab] = useState<'general' | 'appearance' | 'data' | 'logs' | 'ai'>('appearance');
+  const [autoCheck, setAutoCheck] = useState(true);
+  useEffect(() => {
+    if (!open) return;
+    api.GetSettings().then((m: any) => {
+      setAutoCheck(m?.['update.autoCheck'] !== 'off');
+    }).catch(() => {});
+  }, [open ]);
+  function toggleAutoCheck() {
+    setAutoCheck((v) => {
+      const next = !v;
+      api.SetSetting('update.autoCheck', next ? 'on' : 'off').catch(() => {});
+      return next;
+    });
+  }
+  const dirty = (Object.keys(DEFAULT_APPEARANCE) as (keyof Appearance)[]).some((k) => appearance[k] !== DEFAULT_APPEARANCE[k]);
+  const reset = () => onPatch({ ...DEFAULT_APPEARANCE });
+
+  const tabs = [
+    { id: 'general' as const, label: 'General', icon: SlidersHorizontal },
+    { id: 'appearance' as const, label: 'Appearance', icon: Palette },
+    { id: 'data' as const, label: 'Data', icon: Database },
+    { id: 'logs' as const, label: 'Logs', icon: FileText },
+    { id: 'ai' as const, label: 'AI access', icon: Plug2 },
+  ];
+
+  return (
+    <Sheet wide open={open} onClose={onClose} title="Settings" subtitle="General · appearance · data · diagnostics · AI">
+      <div className="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-950/95 px-4 py-2 backdrop-blur">
+        <div className="flex gap-1">
+          {tabs.map((t) => (
+            <button key={t.id} type="button" onClick={() => setStab(t.id)}
+              className={cn('flex cursor-pointer select-none items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors [&_svg]:pointer-events-none',
+                stab === t.id ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200')}>
+              <t.icon size={13} /> {t.label}
             </button>
           ))}
+          {dirty && (
+            <button type="button" onClick={reset} title="Reset appearance to defaults"
+              className="ml-auto flex cursor-pointer items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 [&_svg]:pointer-events-none">
+              <RotateCcw size={11} /> Reset
+            </button>
+          )}
         </div>
-
-        {tab === 'appearance' && (
-          <div className="grid gap-4">
-            <div>
-              <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-zinc-500">Theme</div>
-              <div className="flex gap-1.5">
-                {[
-                  { v: 'dark', icon: Moon, label: 'Dark' },
-                  { v: 'light', icon: Sun, label: 'Light' },
-                ].map((o) => (
-                  <button key={o.v} onClick={() => onPatch({ theme: o.v })}
-                    className={cn('flex flex-1 items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs',
-                      appearance.theme === o.v ? 'acc-border acc-soft acc-text border' : 'border-zinc-800 text-zinc-400 hover:bg-zinc-800')}>
-                    <o.icon size={13} /> {o.label}
-                    {appearance.theme === o.v && <Check size={12} />}
+      </div>
+      <div className="grid gap-3 px-4 py-4">
+        {stab === 'general' && (
+          <div className="grid items-start gap-3">
+            <Section icon={RefreshCw} title={`Updates · SkillsMCP ${version || 'dev'}`}>
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-zinc-200">
+                    {updateInfo?.updateAvailable
+                      ? `${updateInfo.latestVersion} is available — you have ${updateInfo.currentVersion || version || 'dev'}`
+                      : updateInfo
+                        ? `You're on the latest version (${updateInfo.currentVersion || version || 'dev'})`
+                        : `Version ${version || 'dev'} — check GitHub Releases for updates`}
+                  </div>
+                  <div className="mt-0.5 text-[11px] leading-relaxed text-zinc-500">
+                    {updateInfo?.updateAvailable
+                      ? (updateInfo.canInstall
+                        ? 'One click downloads the new build and restarts the app on it.'
+                        : 'Download the new build, then drag SkillsMCP.app to Applications.')
+                      : 'Releases are published automatically on every app change.'}
+                  </div>
+                </div>
+                <Button variant="outline" className="!py-1.5 text-[11px]" onClick={onCheckUpdates} disabled={!!updateChecking}>
+                  {updateChecking ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Check now
+                </Button>
+              </div>
+              {updateInfo?.updateAvailable && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <Button variant="emerald" className="!py-1.5 text-[11px]" onClick={onInstallUpdate} disabled={!!updateBusy}>
+                    {updateBusy ? <Loader2 size={12} className="animate-spin" /> : <ArrowDownToLine size={12} />}
+                    {updateInfo.canInstall ? `Download & install ${updateInfo.latestVersion}` : `Download ${updateInfo.latestVersion}`}
+                  </Button>
+                  <Button variant="outline" className="!py-1.5 text-[11px]" onClick={onOpenRelease}>
+                    <ExternalLink size={12} /> Release notes
+                  </Button>
+                </div>
+              )}
+              {updateMsg && <div className="mt-2 font-mono text-[11px] leading-relaxed text-emerald-200/80">{updateMsg}</div>}
+              <div className="mt-2 flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
+                <span className="text-xs text-zinc-300">Check automatically <span className="text-zinc-600">· once a day on startup</span></span>
+                <Switch on={autoCheck} onToggle={toggleAutoCheck} />
+              </div>
+            </Section>
+          </div>
+        )}
+        {stab === 'appearance' && (
+          <div className="grid items-start gap-3 xl:grid-cols-2">
+            <Section icon={Palette} title="Look & feel">
+              <Sub>Theme</Sub>
+              <Seg value={appearance.theme} onPick={(v) => onPatch({ theme: v })}
+                options={[
+                  { value: 'dark', label: 'Dark', icon: Moon },
+                  { value: 'light', label: 'Light', icon: Sun },
+                ]} />
+              <Sub>Accent</Sub>
+              <div className="flex flex-wrap gap-1.5">
+                {Object.entries(ACCENTS).map(([name, rgb]) => (
+                  <button key={name} type="button" title={name} onClick={() => onPatch({ accent: name })}
+                    className={cn('flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border-2 transition [&_svg]:pointer-events-none',
+                      appearance.accent === name ? 'border-white/80 scale-110' : 'border-transparent hover:scale-105')}
+                    style={{ backgroundColor: `rgb(${rgb})` }}>
+                    {appearance.accent === name && <Check size={14} className="text-zinc-950" />}
                   </button>
                 ))}
               </div>
-            </div>
-            <div>
-              <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-zinc-500">
-                <Palette size={11} /> Accent
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {Object.entries(ACCENTS).map(([name, rgb]) => (
-                  <button key={name} title={name} onClick={() => onPatch({ accent: name })}
-                    className={cn('h-8 w-8 rounded-lg border-2 transition active:scale-95',
-                      appearance.accent === name ? 'border-white/80' : 'border-transparent hover:scale-105')}
-                    style={{ backgroundColor: `rgb(${rgb})` }} />
-                ))}
-              </div>
-              <div className="mt-1 font-mono text-[10px] text-zinc-600">active: {appearance.accent}</div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              {([
-                ['radius', ['balanced', 'sharp', 'soft', 'round', 'none']],
-                ['density', ['compact', 'comfortable', 'spacious']],
-                ['cardStyle', ['elevated', 'bordered', 'glass', 'flat']],
-                ['codeFont', ['jetbrains', 'fira', 'cascadia', 'system']],
-              ] as const).map(([key, opts]) => (
-                <div key={key}>
-                  <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-zinc-500">{key}</div>
-                  <div className="grid gap-1">
-                    {opts.map((o) => (
-                      <button key={o} onClick={() => onPatch({ [key]: o } as any)}
-                        className={cn('rounded-md border px-2 py-1 text-left text-[11px]',
-                          (appearance as any)[key] === o
-                            ? 'acc-border acc-soft acc-text border'
-                            : 'border-zinc-800 text-zinc-400 hover:bg-zinc-800')}>
-                        {o}
-                      </button>
-                    ))}
+          <Sub>Font</Sub>
+          <Seg value={appearance.font} onPick={(v) => onPatch({ font: v })}
+            options={[
+              { value: 'system', label: 'System', icon: Type },
+              { value: 'inter', label: 'Inter', icon: Type },
+              { value: 'manrope', label: 'Manrope', icon: Type },
+              { value: 'outfit', label: 'Outfit', icon: Type },
+              { value: 'grotesk', label: 'Grotesk', icon: Type },
+              { value: 'plex', label: 'Plex', icon: Type },
+              { value: 'cairo', label: 'Cairo', icon: Type },
+              { value: 'tajawal', label: 'Tajawal', icon: Type },
+            ]} />
+          <Sub>Text size</Sub>
+          <Seg value={appearance.fontSize} onPick={(v) => onPatch({ fontSize: v })}
+            options={[{ value: 'sm', label: 'Small' }, { value: 'md', label: 'Default' }, { value: 'lg', label: 'Large' }]} />
+          <Sub>Code font</Sub>
+          <Seg value={appearance.codeFont} onPick={(v) => onPatch({ codeFont: v })}
+            options={[
+              { value: 'jetbrains', label: 'JetBrains' },
+              { value: 'fira', label: 'Fira Code' },
+              { value: 'cascadia', label: 'Cascadia' },
+              { value: 'plexmono', label: 'Plex Mono' },
+              { value: 'sourcecode', label: 'Source Code' },
+              { value: 'robotomono', label: 'Roboto Mono' },
+              { value: 'spacemono', label: 'Space Mono' },
+              { value: 'inconsolata', label: 'Inconsolata' },
+              { value: 'system', label: 'System' },
+            ]} />
+            </Section>
+            <div className="grid gap-3">
+              <Section icon={Square} title="Shape & space">
+                <Sub>Corner radius</Sub>
+                <Seg value={appearance.radius} onPick={(v) => onPatch({ radius: v })}
+                  options={[
+                    { value: 'none', label: 'None' },
+                    { value: 'sharp', label: 'Sharp' },
+                    { value: 'balanced', label: 'Balanced' },
+                    { value: 'soft', label: 'Soft' },
+                    { value: 'round', label: 'Round' },
+                  ]} />
+                <Sub>Cards</Sub>
+                <Seg value={appearance.cardStyle} onPick={(v) => onPatch({ cardStyle: v })}
+                  options={[
+                    { value: 'elevated', label: 'Elevated', icon: Layers },
+                    { value: 'bordered', label: 'Bordered' },
+                    { value: 'flat', label: 'Flat' },
+                    { value: 'glass', label: 'Glass' },
+                  ]} />
+                <Sub>Density</Sub>
+                <Seg value={appearance.density} onPick={(v) => onPatch({ density: v })}
+                  options={[{ value: 'compact', label: 'Compact' }, { value: 'comfortable', label: 'Comfortable' }, { value: 'spacious', label: 'Spacious' }]} />
+                <Sub>Effects</Sub>
+                <div className="grid gap-1.5">
+                  {([
+                    ['shadows', 'Shadows', 'Card depth'],
+                    ['animations', 'Animations', 'Transitions & motion'],
+                    ['glass', 'Frosted glass', 'Blurred sidebar + sheets'],
+                  ] as const).map(([k, label, hint]) => (
+                    <div key={k} className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
+                      <span className="text-xs text-zinc-300">{label} <span className="text-zinc-600">· {hint}</span></span>
+                      <Switch on={appearance[k] === 'on'} onToggle={() => onPatch({ [k]: appearance[k] === 'on' ? 'off' : 'on' } as Partial<Appearance>)} />
+                    </div>
+                  ))}
+                </div>
+              </Section>
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-3">
+                <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-600">Live preview</div>
+                <div className="surf rounded-xl border border-zinc-800 bg-zinc-900/80 p-3">
+                  <div className="h-2 w-12 rounded-full acc-soft" />
+                  <div className="mt-2 h-2.5 w-full rounded bg-zinc-700/40" />
+                  <div className="mt-1.5 h-2.5 w-2/3 rounded bg-zinc-700/25" />
+                  <div className="mt-2.5 flex gap-1.5">
+                    <span className="acc-bg acc-on grid h-8 flex-1 place-items-center rounded-lg text-xs font-bold">Primary</span>
+                    <span className="grid h-8 flex-1 place-items-center rounded-lg border border-zinc-700 text-xs text-zinc-300">Outline</span>
                   </div>
                 </div>
-              ))}
+                <p className="mt-2 text-center text-zinc-500" style={{ fontSize: FONT_SIZES[appearance.fontSize] }}>
+                  Aa — {appearance.accent} · {appearance.font} · {appearance.radius}
+                </p>
+              </div>
             </div>
           </div>
         )}
 
-        {tab === 'data' && (
-          <div className="grid gap-3 text-xs text-zinc-400">
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-              <div className="mb-1 text-[11px] font-medium uppercase tracking-wider text-zinc-500">Database</div>
-              <div className="font-mono text-[11px] text-zinc-300">{storePath || 'loading…'}</div>
-              <div className="mt-1 leading-relaxed">SQLite WAL. Every skill you create is a row here — and an MCP tool.</div>
+        {stab === 'data' && (
+          <Section icon={Database} title="Data & storage">
+          <div className="grid gap-1.5 font-mono text-[11px]">
+            <div className="flex justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-1.5">
+              <span className="shrink-0 text-zinc-500">store</span><span className="truncate text-zinc-300">{storePath || '…'}</span>
             </div>
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-              <div className="mb-1 text-[11px] font-medium uppercase tracking-wider text-zinc-500">How tools map</div>
-              <div className="leading-relaxed">
-                <code className="font-mono text-emerald-300">list_skills</code> = index of enabled skills.
-                <br /><code className="font-mono text-emerald-300">get_skill(name)</code> = full markdown for one skill.
-                <br /><code className="font-mono text-emerald-300">&lt;skill-name&gt;</code> = shortcut tool per skill (same content).
-              </div>
+            <div className="flex gap-1.5">
+              <div className="flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-center"><span className="text-zinc-100">{counts.skills}</span> <span className="text-zinc-500">skills</span></div>
+              <div className="flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-center"><span className="text-zinc-100">{counts.projects}</span> <span className="text-zinc-500">projects</span></div>
+              <div className="flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-center"><span className="text-emerald-300">{counts.enabled}</span> <span className="text-zinc-500">live</span></div>
             </div>
-            <Button variant="outline" onClick={onClose}>Done</Button>
           </div>
+          <div className="mt-2 text-[11px] leading-relaxed text-zinc-600">SQLite (WAL) · every skill you create is a row here — and an MCP tool. Delete the file to reset to the default seed.</div>
+        </Section>
+        )}
+
+        {stab === 'logs' && (
+          <Section icon={FileText} title="Diagnostics log">
+          <div className="mb-1.5 flex items-center gap-1.5">
+            <span className="truncate font-mono text-[10px] text-zinc-600">{logPath || '…'}</span>
+            <span className="ml-auto flex shrink-0 gap-1">
+              <IconBtn title="Reload" size="sm" variant="outline" onClick={onReloadLogs}><RefreshCw size={13} /></IconBtn>
+              <IconBtn title="Copy" size="sm" variant="outline" onClick={() => { navigator.clipboard.writeText((logs || []).join('\n')); }}><Copy size={13} /></IconBtn>
+              <IconBtn title="Clear" size="sm" variant="outline" className="hover:!text-red-300" onClick={onClearLogs}><Trash2 size={13} /></IconBtn>
+            </span>
+          </div>
+          <pre className="max-h-96 min-h-40 overflow-auto rounded-lg codeblock bg-black/60 p-2.5 font-mono text-[10px] leading-relaxed text-zinc-300">{(logs && logs.length ? logs.join('\n') : 'empty — reproduce the error, then hit reload')}</pre>
+          <div className="mt-1.5 text-[11px] text-zinc-600">Backend errors land here (never skill content). Reproduce → reload → paste me the red lines.</div>
+        </Section>
+        )}
+
+        {stab === 'ai' && (
+          <>
+            <Section icon={Plug2} title="AI access">
+              <div className="mb-1.5 flex items-center gap-1.5">
+                <Badge tone="green"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> {mcpUrl.replace('http://', '')}/mcp</Badge>
+              </div>
+              <pre className="max-h-64 min-h-24 overflow-auto rounded-lg codeblock bg-black/60 p-2.5 font-mono text-[11px] text-emerald-200/90">{mcpConfig || 'loading…'}</pre>
+              <Button variant="outline" className="mt-2 !py-1 text-[11px]"
+                onClick={() => { navigator.clipboard.writeText(mcpConfig); setCopied(true); setTimeout(() => setCopied(false), 1200); }}>
+                {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? 'Copied' : 'Copy MCP config'}
+              </Button>
+            </Section>
+            <div className="flex items-center gap-1.5 px-1 text-[11px] text-zinc-600">
+              <Type size={11} /> SkillsMCP {version || 'dev'} · global + per-project MCPs · MCP 2024-11-05
+            </div>
+          </>
         )}
       </div>
     </Sheet>
