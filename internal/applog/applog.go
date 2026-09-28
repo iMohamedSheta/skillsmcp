@@ -11,14 +11,12 @@ import (
 
 var (
 	mu   sync.Mutex
-	dir  string
 	path string
 )
 
 func Init(appDir string) {
 	mu.Lock()
 	defer mu.Unlock()
-	dir = appDir
 	path = filepath.Join(appDir, "skillsmcp.log")
 	_ = os.MkdirAll(appDir, 0o700)
 }
