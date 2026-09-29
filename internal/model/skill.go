@@ -23,6 +23,9 @@ type Skill struct {
 	ProjectID   string `json:"projectId"`
 	ProjectSlug string `json:"projectSlug"`
 	ProjectName string `json:"projectName"`
+	WorkspaceID   string `json:"workspaceId"`
+	WorkspaceSlug string `json:"workspaceSlug"`
+	WorkspaceName string `json:"workspaceName"`
 	Enabled     bool   `json:"enabled"`
 	// SortOrder is the manual position inside its scope group
 	// (globals / one project). Lower comes first; ties break by name.
@@ -39,18 +42,45 @@ type SkillSummary struct {
 	Tags        string `json:"tags"`
 	Scope       string `json:"scope"`
 	ProjectSlug string `json:"projectSlug"`
+	WorkspaceSlug string `json:"workspaceSlug"`
 	Enabled     bool   `json:"enabled"`
 	UpdatedAt   string `json:"updatedAt"`
 }
 
 // Project groups project-specific skills behind their own MCP:
 // `SkillsMCP mcp --project <slug>` serves globals + that project's skills.
+// Every project lives in exactly one workspace.
 type Project struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Slug        string `json:"slug"`
 	Description string `json:"description"`
 	Color       string `json:"color"`
+	WorkspaceID   string `json:"workspaceId"`
+	WorkspaceSlug string `json:"workspaceSlug"`
+	WorkspaceName string `json:"workspaceName"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+// Workspace is a skill library of its own: workspace-global skills +
+// projects, synced to its own git repo. The "main" workspace is the
+// personal library (what single-workspace installs already have).
+// Other workspaces get their own MCPs:
+// `SkillsMCP mcp --workspace <slug>` and per project
+// `SkillsMCP mcp --workspace <slug> --project <pslug>`.
+type Workspace struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	Description string `json:"description"`
+	Color       string `json:"color"`
+	GitRemote   string `json:"gitRemote"`
+	GitBranch   string `json:"gitBranch"`
+	// HasToken reports whether a private-repo token is stored. The token
+	// itself is never returned by any read — only used server-side.
+	HasToken    bool   `json:"hasToken"`
+	IsMain      bool   `json:"isMain"`
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
 }

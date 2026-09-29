@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"skillsmcp/internal/applog"
@@ -14,17 +15,26 @@ import (
 )
 
 // Run starts the MCP stdio loop: the same binary runs as
-// `SkillsMCP.exe mcp [--project <slug>]`, speaking JSON-RPC 2.0 NDJSON
-// on stdin/stdout. No project = main/global MCP. With --project, the
-// server is skillsmcp-<slug> and serves globals + that project's skills.
+// `SkillsMCP.exe mcp [--workspace <slug>] [--project <slug>] [--control]`,
+// speaking JSON-RPC 2.0 NDJSON on stdin/stdout.
+// No workspace = main (personal) workspace: `skillsmcp`, or
+// skillsmcp-<project> with --project. With --workspace, the server is
+// skillsmcp-<workspace> (or skillsmcp-<workspace>-<project>).
+// With control = true, the server is skillsmcp-control and manages the app
+// (all workspaces + write tools). Control cannot combine with a project
+// (workspace is allowed: it scopes creations/lookups, default main).
 //
 // opencode global: { "mcp": { "skillsmcp": {
 //   "type": "local", "command": ["<exe>", "mcp"], "enabled": true } } }
+// opencode workspace: { "mcp": { "skillsmcp-team": {
+//   "type": "local", "command": ["<exe>", "mcp", "--workspace", "team"], "enabled": true } } }
 // opencode project: { "mcp": { "skillsmcp-myapp": {
 //   "type": "local", "command": ["<exe>", "mcp", "--project", "myapp"], "enabled": true } } }
+// opencode control: { "mcp": { "skillsmcp-control": {
+//   "type": "local", "command": ["<exe>", "mcp", "--control"], "enabled": true } } }
 //
 // Protocol version: 2024-11-05. Nothing but JSON-RPC goes to stdout.
-func Run(dbPath string, projectSlug string) int {
+func Run(dbPath string, workspaceSlug string, projectSlug string, control bool) int {
 	applog.Init(store.AppDir())
 	st, err := store.Open(store.ResolveDBPath(dbPath))
 	if err != nil {
@@ -32,16 +42,33 @@ func Run(dbPath string, projectSlug string) int {
 		return 1
 	}
 	defer st.Close()
-	sl := strings.ToLower(strings.TrimSpace(projectSlug))
-	var srv *Server
-	if sl == "" {
-		srv = New(st)
-	} else {
-		if _, ok := st.GetProjectBySlug(sl); !ok {
-			fmt.Fprintf(os.Stderr, "skillsmcp mcp: unknown project %q\n", sl)
+	ws := strings.ToLower(strings.TrimSpace(workspaceSlug))
+	if ws == "" {
+		ws = os.Getenv("SKILLSMCP_WORKSPACE")
+	}
+	wsID := ""
+	if ws != "" {
+		w, ok := st.GetWorkspaceBySlug(ws)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "skillsmcp mcp: unknown workspace %q\n", ws)
 			return 1
 		}
-		srv = NewForProject(st, sl)
+		wsID = w.ID
+	} else if w, ok := st.GetMainWorkspace(); ok {
+		wsID = w.ID
+	}
+	sl := strings.ToLower(strings.TrimSpace(projectSlug))
+	var srv *Server
+	if control {
+		srv = NewControl(st)
+	} else if sl == "" {
+		srv = NewIn(st, wsID)
+	} else {
+		if _, ok := st.GetProjectBySlugIn(wsID, sl); !ok {
+			fmt.Fprintf(os.Stderr, "skillsmcp mcp: unknown project %q in this workspace\n", sl)
+			return 1
+		}
+		srv = NewForProjectIn(st, wsID, sl)
 	}
 	name := srv.serverName()
 
@@ -50,12 +77,44 @@ func Run(dbPath string, projectSlug string) int {
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 
+	var writeMu sync.Mutex
 	write := func(id any, result any, rerr *rpcErr) {
 		resp := rpcResp{JSONRPC: "2.0", ID: id, Result: result, Error: rerr}
 		b, _ := json.Marshal(resp)
 		b = append(b, '\n')
+		writeMu.Lock()
 		_, _ = out.Write(b)
 		_ = out.Flush()
+		writeMu.Unlock()
+	}
+
+	notifyToolsChanged := func() {
+		n := map[string]any{"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
+		b, _ := json.Marshal(n)
+		b = append(b, '\n')
+		writeMu.Lock()
+		_, _ = out.Write(b)
+		_ = out.Flush()
+		writeMu.Unlock()
+	}
+
+	// Live updates: toolList() is already rebuilt from SQLite on every
+	// tools/list call, but MCP clients cache the list until the server
+	// tells them it changed. Poll the fingerprint and push the standard
+	// notification so agents see new skills without restarting the app
+	// or reconnecting the MCP. Control MCP has a static tool list — skip it.
+	if !control {
+		go func() {
+			prev := toolsFingerprint(srv)
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				if cur := toolsFingerprint(srv); cur != prev {
+					prev = cur
+					notifyToolsChanged()
+				}
+			}
+		}()
 	}
 
 	for in.Scan() {
@@ -76,7 +135,7 @@ func Run(dbPath string, projectSlug string) int {
 		case "initialize":
 			write(req.ID, map[string]any{
 				"protocolVersion": "2024-11-05",
-				"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
+				"capabilities":    map[string]any{"tools": map[string]any{"listChanged": true}},
 				"serverInfo":      map[string]any{"name": name, "version": "0.1.0"},
 			}, nil)
 		case "notifications/initialized", "notifications/cancelled", "logging/setLevel":

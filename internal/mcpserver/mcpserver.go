@@ -1,11 +1,17 @@
 // Package mcpserver exposes the skill library over MCP (stdio + HTTP).
 //
 // Scopes:
-//   - MAIN MCP (no project): serves GLOBAL skills only, plus
+//   - MAIN MCP (no project): serves one workspace's GLOBAL skills, plus
 //     list_projects + list_project_skills so the AI can discover projects.
 //     Every enabled global skill is also its own tool.
-//   - PROJECT MCP (`mcp --project <slug>`): serves globals + that
-//     project's skills. Server name is skillsmcp-<slug>.
+//   - PROJECT MCP (`mcp --project <slug>`): serves that workspace's
+//     globals + that project's skills.
+//   - WORKSPACE MCP (`mcp --workspace <slug>`): the same two shapes for
+//     another workspace. No --workspace means the main (personal) one,
+//     whose server names stay exactly as before (`skillsmcp`,
+//     `skillsmcp-<project>`) so existing client configs keep working.
+//     Other workspaces are `skillsmcp-<workspace>` and
+//     `skillsmcp-<workspace>-<project>`.
 package mcpserver
 
 import (
@@ -23,34 +29,72 @@ import (
 )
 
 // Server serves MCP over loopback HTTP plus plain REST the UI uses.
-// ProjectID == "" means the main/global MCP.
+// WorkspaceID selects the workspace (resolved to the main workspace
+// when empty). ProjectID == "" means the workspace's main/global MCP.
+// Control == true means the management MCP (skillsmcp-control): read
+// everything + write tools across all workspaces.
 type Server struct {
-	st        *store.Store
-	projectID string
-	mu        sync.Mutex
-	http      *http.Server
-	listener  net.Listener
-	addr      string
-	running   bool
+	st          *store.Store
+	workspaceID string
+	projectID   string
+	control     bool
+	mu          sync.Mutex
+	http        *http.Server
+	listener    net.Listener
+	addr        string
+	running     bool
 }
 
-func New(st *store.Store) *Server { return &Server{st: st} }
+// New builds the main workspace's main MCP (`skillsmcp`).
+func New(st *store.Store) *Server { return NewIn(st, "") }
 
-// NewForProject builds a project-scoped server (globals + that project).
+// NewIn builds one workspace's main MCP.
+func NewIn(st *store.Store, workspaceID string) *Server {
+	if strings.TrimSpace(workspaceID) == "" {
+		if w, ok := st.GetMainWorkspace(); ok {
+			workspaceID = w.ID
+		}
+	}
+	return &Server{st: st, workspaceID: workspaceID}
+}
+
+// NewControl builds the management server (all scopes + write tools).
+// It ignores projects: control sees everything.
+func NewControl(st *store.Store) *Server {
+	return &Server{st: st, control: true}
+}
+
+func (s *Server) IsControl() bool {
+	return s.control
+}
+
+// NewForProject builds a main-workspace project-scoped server.
 // Unknown slug falls back to main/global (callers should validate first).
 func NewForProject(st *store.Store, projectSlug string) *Server {
+	return NewForProjectIn(st, "", projectSlug)
+}
+
+// NewForProjectIn builds a workspace's project-scoped server (that
+// workspace's globals + that project's skills).
+func NewForProjectIn(st *store.Store, workspaceID, projectSlug string) *Server {
+	srv := NewIn(st, workspaceID)
 	sl := strings.ToLower(strings.TrimSpace(projectSlug))
 	if sl == "" {
-		return &Server{st: st}
+		return srv
 	}
-	if p, ok := st.GetProjectBySlug(sl); ok {
-		return &Server{st: st, projectID: p.ID}
+	if p, ok := st.GetProjectBySlugIn(srv.workspaceID, sl); ok {
+		srv.projectID = p.ID
 	}
-	return &Server{st: st}
+	return srv
 }
 
 func (s *Server) ProjectID() string {
 	return s.projectID
+}
+
+// WorkspaceID reports the workspace this server reads.
+func (s *Server) WorkspaceID() string {
+	return s.workspaceID
 }
 
 func (s *Server) project() (model.Project, bool) {
@@ -60,11 +104,34 @@ func (s *Server) project() (model.Project, bool) {
 	return s.st.GetProject(s.projectID)
 }
 
-func (s *Server) serverName() string {
-	if p, ok := s.project(); ok {
-		return "skillsmcp-" + p.Slug
+func (s *Server) workspace() (model.Workspace, bool) {
+	if s.workspaceID == "" {
+		return s.st.GetMainWorkspace()
 	}
-	return "skillsmcp"
+	return s.st.GetWorkspace(s.workspaceID)
+}
+
+// isMainWorkspace reports whether this server reads the personal workspace.
+func (s *Server) isMainWorkspace() bool {
+	w, ok := s.workspace()
+	return ok && w.IsMain
+}
+
+func (s *Server) serverName() string {
+	if s.control {
+		return "skillsmcp-control"
+	}
+	w, ok := s.workspace()
+	if !ok || w.IsMain {
+		if p, pok := s.project(); pok {
+			return "skillsmcp-" + p.Slug
+		}
+		return "skillsmcp"
+	}
+	if p, pok := s.project(); pok {
+		return "skillsmcp-" + w.Slug + "-" + p.Slug
+	}
+	return "skillsmcp-" + w.Slug
 }
 
 func (s *Server) Addr() string {
@@ -105,17 +172,68 @@ func emptyObj() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}}
 }
 
-// scopedSkills: main = globals only; project = globals + that project.
+// ToolNames returns the current tool names (for UI previews).
+func (s *Server) ToolNames() []string {
+	tools := s.toolList()
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		names = append(names, t.Name)
+	}
+	return names
+}
+
+// scopedSkills: main = workspace globals; project = workspace globals + project.
 func (s *Server) scopedSkills() []model.Skill {
 	if s.projectID == "" {
-		return s.st.ListGlobalSkills(false)
+		return s.st.ListGlobalSkillsIn(s.workspaceID, false)
 	}
 	return s.st.ListProjectMCPSkills(s.projectID, false)
 }
 
 // toolList is rebuilt on EVERY call so adding/enabling a skill
 // immediately shows up as a new MCP tool (no restart needed).
+// Clients learn about it via tools/list re-query + the
+// notifications/tools/list_changed push (see stdio.go watcher).
 func (s *Server) toolList() []toolDef {
+	if s.control {
+		out := []toolDef{
+			{
+				Name:        "list_skills",
+				Description: s.listDesc(),
+				InputSchema: emptyObj(),
+			},
+		{
+			Name:        "get_skill",
+			Description: "Fetch the full markdown instruction for one skill by name (any workspace + scope, even disabled). Use after list_skills when you know which skill you need.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name":      map[string]any{"type": "string", "description": "Skill name, e.g. git-commit"},
+					"workspace": map[string]any{"type": "string", "description": "Workspace slug, default main."},
+				},
+				"required": []string{"name"},
+			},
+		},
+		{
+			Name:        "list_projects",
+			Description: "List projects that have their own MCP (slug + description + skill counts + workspace).",
+			InputSchema: emptyObj(),
+		},
+		{
+			Name:        "list_project_skills",
+			Description: "List skill names in one project (index only, no content). Use get_skill for the full instruction.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"project":   map[string]any{"type": "string", "description": "Project slug, e.g. my-app"},
+					"workspace": map[string]any{"type": "string", "description": "Workspace slug, default main. Required when the slug exists in several workspaces."},
+				},
+				"required": []string{"project"},
+			},
+		},
+	}
+		return append(out, controlToolDefs()...)
+	}
 	skills := s.scopedSkills()
 	out := []toolDef{
 		{
@@ -161,15 +279,42 @@ func (s *Server) toolList() []toolDef {
 	return out
 }
 
+// toolsFingerprint is a cheap change detector for the stdio watcher.
+// Any add/rename/enable/description edit changes the joined names,
+// so the watcher can push notifications/tools/list_changed.
+func toolsFingerprint(s *Server) string {
+	tools := s.toolList()
+	var b strings.Builder
+	for _, t := range tools {
+		b.WriteString(t.Name)
+		b.WriteString("\x00")
+		b.WriteString(t.Description)
+		b.WriteString("\x00;")
+	}
+	return b.String()
+}
+
 func (s *Server) listDesc() string {
+	if s.control {
+		return "Management index: EVERY skill in every workspace and scope (global + all projects), including disabled ones. Start every management session here, then get_skill / create_skill / update_skill as needed. Call app_help first for the full playbook."
+	}
 	if p, ok := s.project(); ok {
+		if w, wok := s.workspace(); wok && !w.IsMain {
+			return fmt.Sprintf("Index of skills in workspace %q project %q (workspace globals + project skills). Start every session here, then call the matching skill tool or get_skill.", w.Slug, p.Slug)
+		}
 		return fmt.Sprintf("Index of skills in project %q (globals + project skills). Start every session here, then call the matching skill tool or get_skill.", p.Slug)
+	}
+	if w, wok := s.workspace(); wok && !w.IsMain {
+		return fmt.Sprintf("Index of workspace %q GLOBAL skills (name + description + category). Start every session here, then call the matching skill tool or get_skill.", w.Slug)
 	}
 	return "Index of GLOBAL skills (name + description + category). Start every session here, then call the matching skill tool or get_skill. Project skills live behind their own MCP — see list_projects."
 }
 
 func (s *Server) callTool(ctx context.Context, name string, args map[string]any) (any, error) {
 	_ = ctx
+	if s.control {
+		return s.callControlTool(name, args)
+	}
 	str := func(k string) string {
 		if v, ok := args[k].(string); ok {
 			return v
@@ -189,11 +334,11 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		}
 		rows := []row{}
 		if s.projectID == "" {
-			for _, m := range s.st.ListSummariesForProject("") {
+			for _, m := range s.st.ListSummariesForProjectIn(s.workspaceID, "") {
 				rows = append(rows, row{Name: m.Name, Description: m.Description, Category: m.Category, Tags: m.Tags, Scope: "global", UpdatedAt: m.UpdatedAt})
 			}
 		} else {
-			for _, m := range s.st.ListSummariesForProject(s.projectID) {
+			for _, m := range s.st.ListSummariesForProjectIn(s.workspaceID, s.projectID) {
 				sc := m.Scope
 				if sc == "" {
 					sc = "global"
@@ -203,7 +348,15 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		}
 		hint := "Call the matching skill tool (e.g. git-commit) or get_skill {name} for the full instruction."
 		if s.projectID == "" {
-			hint += " Need project skills? Call list_projects, then switch to that project's MCP (`mcp --project <slug>`)."
+			hint += " Need project skills? Call list_projects, then switch to that project's MCP."
+			if !s.isMainWorkspace() {
+				if w, ok := s.workspace(); ok {
+					hint += fmt.Sprintf(" (this workspace: `mcp --workspace %s --project <slug>`)", w.Slug)
+				}
+			} else {
+				hint += " (`mcp --project <slug>`)"
+
+			}
 		}
 		return map[string]any{"skills": rows, "hint": hint}, nil
 	case "get_skill":
@@ -211,7 +364,7 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		if n == "" {
 			return nil, fmt.Errorf("name required (e.g. {\"name\": \"git-commit\"})")
 		}
-		sk, ok := s.st.GetSkill(n)
+		sk, ok := s.st.GetSkillIn(s.workspaceID, n)
 		if !ok {
 			return nil, fmt.Errorf("unknown skill %q — call list_skills first", n)
 		}
@@ -226,7 +379,7 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		if s.projectID != "" {
 			return nil, fmt.Errorf("list_projects lives on the main MCP only — this is the %q project MCP", s.serverName())
 		}
-		projs := s.st.ListProjects()
+		projs := s.st.ListProjectsIn(s.workspaceID)
 		type prow struct {
 			Name        string `json:"name"`
 			Slug        string `json:"slug"`
@@ -237,9 +390,15 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		for _, p := range projs {
 			rows = append(rows, prow{Name: p.Name, Slug: p.Slug, Description: p.Description, Skills: s.st.CountProjectSkills(p.ID)})
 		}
+		hint := "Each project has its own MCP serving workspace globals + that project's skills."
+		if w, ok := s.workspace(); ok && !w.IsMain {
+			hint += fmt.Sprintf(" (`SkillsMCP mcp --workspace %s --project <slug>`.", w.Slug)
+		} else {
+			hint += " (`SkillsMCP mcp --project <slug>`)."
+		}
 		return map[string]any{
 			"projects": rows,
-			"hint":     "Each project has its own MCP: `SkillsMCP mcp --project <slug>` serves globals + that project's skills.",
+			"hint":     hint,
 		}, nil
 	case "list_project_skills":
 		if s.projectID != "" {
@@ -249,7 +408,7 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		if slug == "" {
 			return nil, fmt.Errorf("project required (e.g. {\"project\": \"my-app\"}) — call list_projects first")
 		}
-		p, ok := s.st.GetProjectBySlug(slug)
+		p, ok := s.st.GetProjectBySlugIn(s.workspaceID, slug)
 		if !ok {
 			return nil, fmt.Errorf("unknown project %q — call list_projects first", slug)
 		}
@@ -261,12 +420,16 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		for _, sk := range s.st.ListProjectSkills(p.ID, false) {
 			rows = append(rows, row{Name: sk.Name, Description: sk.Description})
 		}
+		projCmd := fmt.Sprintf("SkillsMCP mcp --project %s", p.Slug)
+		if w, ok := s.workspace(); ok && !w.IsMain {
+			projCmd = fmt.Sprintf("SkillsMCP mcp --workspace %s --project %s", w.Slug, p.Slug)
+		}
 		return map[string]any{
 			"project": p.Slug, "skills": rows,
-			"hint": fmt.Sprintf("Switch to this project's MCP for full content: `SkillsMCP mcp --project %s`, then list_skills.", p.Slug),
+			"hint": fmt.Sprintf("Switch to this project's MCP for full content: `%s`, then list_skills.", projCmd),
 		}, nil
 	default:
-		sk, ok := s.st.GetSkill(name)
+		sk, ok := s.st.GetSkillIn(s.workspaceID, name)
 		if !ok {
 			return nil, fmt.Errorf("unknown tool %q — call list_skills to see available skills", name)
 		}
@@ -285,6 +448,7 @@ func skillPayload(sk model.Skill) map[string]any {
 		"name": sk.Name, "description": sk.Description,
 		"category": sk.Category, "tags": sk.Tags,
 		"scope": sScope(sk), "project": sk.ProjectSlug,
+		"workspace": sk.WorkspaceSlug,
 		"content": sk.Content,
 	}
 }
@@ -296,12 +460,29 @@ func sScope(sk model.Skill) string {
 	return sk.Scope
 }
 
-// visible enforces scope: main sees globals only; project sees globals + own.
+// visible enforces scope: same workspace required; main sees globals
+// only; project sees globals + own project.
 func (s *Server) visible(sk model.Skill) bool {
+	if sk.WorkspaceID != "" && s.workspaceID != "" && sk.WorkspaceID != s.workspaceID {
+		return false
+	}
 	if sScope(sk) == "global" || sk.ProjectID == "" {
 		return true
 	}
 	return s.projectID != "" && sk.ProjectID == s.projectID
+}
+
+func (s *Server) mcpCommand(projSlug string) string {
+	if w, ok := s.workspace(); ok && !w.IsMain {
+		if projSlug != "" {
+			return fmt.Sprintf("SkillsMCP mcp --workspace %s --project %s", w.Slug, projSlug)
+		}
+		return fmt.Sprintf("SkillsMCP mcp --workspace %s", w.Slug)
+	}
+	if projSlug != "" {
+		return fmt.Sprintf("SkillsMCP mcp --project %s", projSlug)
+	}
+	return "SkillsMCP mcp"
 }
 
 func (s *Server) scopeHint(sk model.Skill) string {
@@ -318,9 +499,9 @@ func (s *Server) scopeHint(sk model.Skill) string {
 		proj = "<slug>"
 	}
 	if s.projectID == "" {
-		return fmt.Sprintf("it is a project skill — use its project MCP: `SkillsMCP mcp --project %s`", proj)
+		return fmt.Sprintf("it is a project skill — use its project MCP: `%s`", s.mcpCommand(proj))
 	}
-	return fmt.Sprintf("it belongs to another project — switch to `SkillsMCP mcp --project %s`", proj)
+	return fmt.Sprintf("it belongs to another project — switch to `%s`", s.mcpCommand(proj))
 }
 
 // Start binds 127.0.0.1:preferredPort (or ephemeral fallback) and serves MCP + REST.
@@ -431,7 +612,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	case "initialize":
 		writeJSON(w, rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
 			"protocolVersion": "2024-11-05",
-			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": true}},
 			"serverInfo":      map[string]any{"name": name, "version": "0.1.0"},
 		}})
 	case "ping":

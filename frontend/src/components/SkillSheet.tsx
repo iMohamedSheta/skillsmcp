@@ -10,7 +10,7 @@ import { cn } from '../lib/cn';
 
 export const EMPTY_SKILL: SkillInput = {
   name: '', description: '', content: '', category: '', tags: '',
-  scope: 'global', projectId: '', enabled: true,
+  scope: 'global', projectId: '', workspaceId: '', enabled: true,
 };
 
 export function skillToInput(s: Skill): SkillInput {
@@ -18,17 +18,18 @@ export function skillToInput(s: Skill): SkillInput {
     name: s.name, description: s.description, content: s.content,
     category: s.category || '', tags: s.tags || '',
     scope: s.scope === 'project' ? 'project' : 'global',
-    projectId: s.projectId || '', enabled: s.enabled,
+    projectId: s.projectId || '', workspaceId: s.workspaceId || '', enabled: s.enabled,
   };
 }
 
 // Bottom-sheet skill editor with draft memory: closing the sheet never
 // loses text — every keystroke persists to localStorage and is restored
 // on reopen. Only an explicit confirmed Reset clears it (or a save).
-export default function SkillSheet({ open, onClose, initial, editing, projects, onSaved }: {
+export default function SkillSheet({ open, onClose, initial, editing, projects, workspaceId, workspaceName, onSaved }: {
   open: boolean; onClose: () => void;
   initial: SkillInput; editing: Skill | null;
   projects: Project[];
+  workspaceId: string; workspaceName: string;
   onSaved: (s: Skill) => void;
 }) {
   const key = draftKeyFor(editing ? editing.id : null);
@@ -68,7 +69,7 @@ export default function SkillSheet({ open, onClose, initial, editing, projects, 
   function freshForm(): SkillInput {
     // Reset = back to blank (new) or to the saved skill (edit).
     if (editing) return skillToInput(editing);
-    return { ...EMPTY_SKILL, scope: initial.scope, projectId: initial.projectId };
+    return { ...EMPTY_SKILL, scope: initial.scope, projectId: initial.projectId, workspaceId: initial.workspaceId || workspaceId };
   }
 
   function doReset() {
@@ -98,6 +99,7 @@ export default function SkillSheet({ open, onClose, initial, editing, projects, 
         tags: form.tags.trim(),
         scope: form.scope === 'project' ? 'project' : 'global',
         projectId: form.scope === 'project' ? form.projectId : '',
+        workspaceId: editing ? (editing.workspaceId || workspaceId) : (form.workspaceId || workspaceId),
         enabled: form.enabled,
       };
       const saved = editing
@@ -121,7 +123,9 @@ export default function SkillSheet({ open, onClose, initial, editing, projects, 
     <>
       <BottomSheet open={open} onClose={onClose} wide
         title={editing ? `Edit skill · ${editing.name}` : 'New skill → new MCP tool'}
-        subtitle={editing ? 'Changes go live on the next tools/list — no restart' : 'Global = main MCP · Project = that project\u2019s own MCP'}>
+        subtitle={editing
+          ? 'Changes go live on the next tools/list — no restart'
+          : `Global = workspace MCP · Project = that project\u2019s own MCP · in ${workspaceName || 'workspace'}`}>
         <div className="grid gap-3 p-4">
           {restored && (
             <div className="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-200">

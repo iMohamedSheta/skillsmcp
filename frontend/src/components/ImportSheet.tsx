@@ -35,10 +35,16 @@ let rowSeq = 0;
 // Bulk import: one skill per .md/.txt file, into Global or a project.
 // Name comes from the first `# heading` (fallback: filename),
 // description from the first `> quote` — both editable per row.
-export default function ImportSheet({ open, onClose, initialScope, initialProjectId, projects, onImported }: {
+//
+// .zip archives (built by Export) restore losslessly instead: every
+// skill comes back with category, tags, enabled state and order, and
+// project archives recreate their project when its slug is gone.
+// Duplicates are skipped, never overwritten.
+export default function ImportSheet({ open, onClose, initialScope, initialProjectId, projects, workspaceId, onImported }: {
   open: boolean; onClose: () => void;
   initialScope: 'global' | 'project'; initialProjectId: string;
   projects: Project[];
+  workspaceId: string;
   onImported: () => void;
 }) {
   const [rows, setRows] = useState<ImportRow[]>([]);
@@ -46,18 +52,43 @@ export default function ImportSheet({ open, onClose, initialScope, initialProjec
   const [projectId, setProjectId] = useState(initialProjectId);
   const [importing, setImporting] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [archive, setArchive] = useState<{ name: string; base64: string } | null>(null);
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [archiveMsg, setArchiveMsg] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
       setScope(initialScope);
       setProjectId(initialProjectId);
+      setArchive(null);
+      setArchiveMsg('');
     }
   }, [open, initialScope, initialProjectId ]);
+
+  function readAsBase64(f: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onerror = () => reject(new Error('could not read file'));
+      r.onload = () => {
+        const s = String(r.result || '');
+        const i = s.indexOf('base64,');
+        resolve(i >= 0 ? s.slice(i + 7) : s);
+      };
+      r.readAsDataURL(f);
+    });
+  }
 
   async function addFiles(list: FileList | File[]) {
     const files = [...list].filter((f) => !f.name.startsWith('.'));
     for (const f of files) {
+      if (/\.zip$/i.test(f.name)) {
+        try {
+          setArchive({ name: f.name, base64: await readAsBase64(f) });
+          setArchiveMsg('');
+        } catch {}
+        continue;
+      }
       try {
         const text = await f.text();
         if (!text.trim()) continue;
@@ -93,6 +124,7 @@ export default function ImportSheet({ open, onClose, initialScope, initialProjec
           category: '',
           tags: '',
           scope, projectId: scope === 'project' ? projectId : '',
+          workspaceId,
           enabled: true,
         });
         setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, status: 'ok' as const, msg: '' } : x)));
@@ -104,10 +136,31 @@ export default function ImportSheet({ open, onClose, initialScope, initialProjec
     onImported();
   }
 
+  async function doImportArchive() {
+    if (!archive || archiveBusy) return;
+    if (scope === 'project' && !projectId) return;
+    setArchiveBusy(true);
+    setArchiveMsg('');
+    try {
+      const r = (await (api as any).ImportArchive(archive.base64, scope, scope === 'project' ? projectId : '', workspaceId)) as {
+        imported: number; skipped: string[]; project?: string;
+      };
+      const bits = [`${r.imported} restored`];
+      if (r.project) bits.push(`project ${r.project}`);
+      if (r.skipped?.length) bits.push(`${r.skipped.length} skipped (already exists)`);
+      setArchiveMsg(bits.join(' · ') + ' ✓');
+      onImported();
+    } catch (e: any) {
+      setArchiveMsg('failed: ' + (e?.message || String(e)));
+    } finally {
+      setArchiveBusy(false);
+    }
+  }
+
   return (
     <BottomSheet open={open} onClose={onClose} wide
       title="Import skills from files"
-      subtitle="One skill per .md file · Global = main MCP · Project = that project's own MCP">
+      subtitle="One skill per .md file · .zip archives restore losslessly · Global = main MCP · Project = that project's own MCP">
       <div className="grid gap-3 p-4">
         {/* drop zone */}
         <div
@@ -119,12 +172,36 @@ export default function ImportSheet({ open, onClose, initialScope, initialProjec
             dragOver ? 'acc-border acc-soft border' : 'border-zinc-700 hover:border-zinc-500 hover:bg-zinc-900')}>
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-300"><Upload size={18} /></div>
           <div className="min-w-0">
-            <div className="text-[13px] font-medium text-zinc-200">Drop .md files here or click to browse</div>
-            <div className="text-[11px] text-zinc-500">Name ← first <code className="font-mono"># heading</code> (else filename) · description ← first <code className="font-mono">&gt; quote</code></div>
+            <div className="text-[13px] font-medium text-zinc-200">Drop .md or .zip files here or click to browse</div>
+            <div className="text-[11px] text-zinc-500">Name ← first <code className="font-mono"># heading</code> (else filename) · description ← first <code className="font-mono">&gt; quote</code> · <code className="font-mono">.zip</code> = exported archive</div>
           </div>
-          <input ref={fileRef} type="file" accept=".md,.markdown,.txt" multiple className="hidden"
+          <input ref={fileRef} type="file" accept=".md,.markdown,.txt,.zip" multiple className="hidden"
             onChange={(e) => { if (e.target.files?.length) void addFiles(e.target.files); e.target.value = ''; }} />
         </div>
+
+        {/* archive restore panel */}
+        {archive && (
+          <div className="grid gap-2 rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-3">
+            <div className="flex items-center gap-2">
+              <FileText size={14} className="shrink-0 text-indigo-300" />
+              <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-zinc-100">{archive.name}</span>
+              <button onClick={() => { setArchive(null); setArchiveMsg(''); }}
+                className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200">
+                <X size={12} />
+              </button>
+            </div>
+            <div className="text-[11px] leading-relaxed text-zinc-400">
+              Archive restores every skill exactly (content, category, tags, on/off, order)
+              {scope === 'project' ? ' into the selected project.' : ' as global skills.'} Project archives recreate
+              their project when its slug is gone. Existing names are skipped.
+            </div>
+            {archiveMsg && <div className="text-[11px] text-emerald-300">{archiveMsg}</div>}
+            <Button variant="emerald" onClick={doImportArchive} disabled={archiveBusy || (scope === 'project' && !projectId)} className="!py-2 text-xs">
+              {archiveBusy ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+              {archiveBusy ? 'Restoring…' : 'Restore archive'}
+            </Button>
+          </div>
+        )}
 
         {/* scope switch */}
         <div className="grid grid-cols-2 gap-1 rounded-lg border border-zinc-800 bg-zinc-900 p-1">

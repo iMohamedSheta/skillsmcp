@@ -1,1 +1,1 @@
-export type Tab = 'home' | 'skills' | 'projects' | 'mcp' | 'logs';
+export type Tab = 'home' | 'skills' | 'projects' | 'workspace' | 'mcp' | 'logs';

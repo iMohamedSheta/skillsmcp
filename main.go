@@ -23,23 +23,31 @@ func main() {
 		fmt.Println(version.Version)
 		return
 	}
-	// MCP stdio mode: `SkillsMCP.exe mcp [--db path] [--project slug]`.
-	// No project = main/global MCP. With --project = that project's MCP
-	// (globals + project skills). Handled before wails.Run so MCP never
-	// touches the GUI single-instance lock.
+	// MCP stdio mode: `SkillsMCP.exe mcp [--workspace slug] [--project slug] [--control]`.
+	// No workspace = main (personal) workspace. No project = workspace-main MCP.
+	// With --project = that project's MCP (workspace globals + project skills).
+	// With --control = the management MCP (skillsmcp-control: all workspaces +
+	// write tools). Handled before wails.Run so MCP never touches the GUI lock.
 	if len(os.Args) > 1 && (os.Args[1] == "mcp" || os.Args[1] == "--mcp") {
 		fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 		dbPath := fs.String("db", "", "path to skills.db (or set SKILLSMCP_DB_PATH)")
+		workspace := fs.String("workspace", "", "workspace slug, default main (or set SKILLSMCP_WORKSPACE)")
 		project := fs.String("project", "", "project slug for the project MCP (or set SKILLSMCP_PROJECT)")
+		control := fs.Bool("control", false, "run the management MCP (or set SKILLSMCP_CONTROL=1)")
 		_ = fs.Parse(os.Args[2:])
 		sl := *project
 		if sl == "" {
 			sl = os.Getenv("SKILLSMCP_PROJECT")
 		}
-		os.Exit(mcpserver.Run(*dbPath, sl))
+		ws := *workspace
+		if ws == "" {
+			ws = os.Getenv("SKILLSMCP_WORKSPACE")
+		}
+		ctl := *control || os.Getenv("SKILLSMCP_CONTROL") == "1"
+		os.Exit(mcpserver.Run(*dbPath, ws, sl, ctl))
 	}
 	if v := os.Getenv("SKILLSMCP_MCP"); v == "1" {
-		os.Exit(mcpserver.Run("", os.Getenv("SKILLSMCP_PROJECT")))
+		os.Exit(mcpserver.Run("", os.Getenv("SKILLSMCP_WORKSPACE"), os.Getenv("SKILLSMCP_PROJECT"), os.Getenv("SKILLSMCP_CONTROL") == "1"))
 	}
 
 	dbPath := os.Getenv("SKILLSMCP_DB_PATH")

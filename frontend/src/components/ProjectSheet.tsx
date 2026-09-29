@@ -4,13 +4,14 @@ import { api } from '../lib/api';
 import type { Project, ProjectInput } from '../lib/types';
 import { BottomSheet, Button, Input } from './ui';
 
-export const EMPTY_PROJECT: ProjectInput = { name: '', slug: '', description: '', color: '' };
+export const EMPTY_PROJECT: ProjectInput = { name: '', slug: '', description: '', color: '', workspaceId: '' };
 
 const PALETTE = ['#10b981', '#6366f1', '#f59e0b', '#ec4899', '#06b6d4', '#8b5cf6', '#f43f5e', '#14b8a6'];
 
-export default function ProjectSheet({ open, onClose, initial, editing, onSaved }: {
+export default function ProjectSheet({ open, onClose, initial, editing, workspaceId, workspaceSlug, onSaved }: {
   open: boolean; onClose: () => void;
   initial: ProjectInput; editing: Project | null;
+  workspaceId: string; workspaceSlug: string;
   onSaved: (p: Project) => void;
 }) {
   const [form, setForm] = useState<ProjectInput>({ ...EMPTY_PROJECT });
@@ -44,6 +45,7 @@ export default function ProjectSheet({ open, onClose, initial, editing, onSaved 
         slug: (form.slug || form.name).toLowerCase().trim(),
         description: form.description.trim(),
         color: form.color,
+        workspaceId: editing ? (editing.workspaceId || workspaceId) : (form.workspaceId || workspaceId),
       };
       const saved = editing
         ? ((await api.UpdateProject(editing.id, payload)) as Project)

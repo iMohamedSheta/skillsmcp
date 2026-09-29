@@ -6,6 +6,9 @@ export namespace model {
 	    slug: string;
 	    description: string;
 	    color: string;
+	    workspaceId: string;
+	    workspaceSlug: string;
+	    workspaceName: string;
 	    createdAt: string;
 	    updatedAt: string;
 	
@@ -20,6 +23,9 @@ export namespace model {
 	        this.slug = source["slug"];
 	        this.description = source["description"];
 	        this.color = source["color"];
+	        this.workspaceId = source["workspaceId"];
+	        this.workspaceSlug = source["workspaceSlug"];
+	        this.workspaceName = source["workspaceName"];
 	        this.createdAt = source["createdAt"];
 	        this.updatedAt = source["updatedAt"];
 	    }
@@ -35,6 +41,9 @@ export namespace model {
 	    projectId: string;
 	    projectSlug: string;
 	    projectName: string;
+	    workspaceId: string;
+	    workspaceSlug: string;
+	    workspaceName: string;
 	    enabled: boolean;
 	    sortOrder: number;
 	    createdAt: string;
@@ -56,8 +65,43 @@ export namespace model {
 	        this.projectId = source["projectId"];
 	        this.projectSlug = source["projectSlug"];
 	        this.projectName = source["projectName"];
+	        this.workspaceId = source["workspaceId"];
+	        this.workspaceSlug = source["workspaceSlug"];
+	        this.workspaceName = source["workspaceName"];
 	        this.enabled = source["enabled"];
 	        this.sortOrder = source["sortOrder"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
+	export class Workspace {
+	    id: string;
+	    name: string;
+	    slug: string;
+	    description: string;
+	    color: string;
+	    gitRemote: string;
+	    gitBranch: string;
+	    hasToken: boolean;
+	    isMain: boolean;
+	    createdAt: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Workspace(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.slug = source["slug"];
+	        this.description = source["description"];
+	        this.color = source["color"];
+	        this.gitRemote = source["gitRemote"];
+	        this.gitBranch = source["gitBranch"];
+	        this.hasToken = source["hasToken"];
+	        this.isMain = source["isMain"];
 	        this.createdAt = source["createdAt"];
 	        this.updatedAt = source["updatedAt"];
 	    }
@@ -72,6 +116,7 @@ export namespace store {
 	    slug: string;
 	    description: string;
 	    color: string;
+	    workspaceId: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProjectInput(source);
@@ -83,6 +128,7 @@ export namespace store {
 	        this.slug = source["slug"];
 	        this.description = source["description"];
 	        this.color = source["color"];
+	        this.workspaceId = source["workspaceId"];
 	    }
 	}
 	export class SkillInput {
@@ -93,6 +139,7 @@ export namespace store {
 	    tags: string;
 	    scope: string;
 	    projectId: string;
+	    workspaceId: string;
 	    enabled: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -108,7 +155,32 @@ export namespace store {
 	        this.tags = source["tags"];
 	        this.scope = source["scope"];
 	        this.projectId = source["projectId"];
+	        this.workspaceId = source["workspaceId"];
 	        this.enabled = source["enabled"];
+	    }
+	}
+	export class WorkspaceInput {
+	    name: string;
+	    slug: string;
+	    description: string;
+	    color: string;
+	    gitRemote: string;
+	    gitBranch: string;
+	    gitToken: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.slug = source["slug"];
+	        this.description = source["description"];
+	        this.color = source["color"];
+	        this.gitRemote = source["gitRemote"];
+	        this.gitBranch = source["gitBranch"];
+	        this.gitToken = source["gitToken"];
 	    }
 	}
 

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   LayoutGrid, BookOpen, FolderKanban, Plus, Search, Plug2, RefreshCw, Trash2, Copy, Check,
-  Upload, Power, ScrollText, Pencil, FlaskConical, Globe,
+  Upload, Download, Power, ScrollText, Pencil, FlaskConical, Globe, Layers,
   ChevronDown, ChevronRight, FolderPlus,
 } from 'lucide-react';
 import { api, type UpdateInfo } from './lib/api';
-import type { Project, ProjectInput, Skill, SkillInput } from './lib/types';
+import type { Project, ProjectInput, Skill, SkillInput, Workspace } from './lib/types';
 import { applyAppearance, loadLocalAppearance, mergeSettingsMap, saveLocalAppearance, type Appearance } from './lib/appearance';
 import Menubar from './components/Menu';
 import SettingsSheet from './components/SettingsSheet';
@@ -15,6 +15,7 @@ import SkillSheet, { EMPTY_SKILL } from './components/SkillSheet';
 import ImportSheet from './components/ImportSheet';
 import SkillDetail from './components/SkillDetail';
 import ProjectSheet, { EMPTY_PROJECT } from './components/ProjectSheet';
+import WorkspacePanel from './components/WorkspacePanel';
 import type { Tab } from './components/menuTypes';
 import { Badge, Button, Card, Empty, IconBtn, Input, ConfirmModal, Tip } from './components/ui';
 import { cn } from './lib/cn';
@@ -24,6 +25,12 @@ type HomeFilter = 'all' | 'global' | string; // 'all' | 'global' | `project:<id>
 export default function App() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [activeWsId, setActiveWsId] = useState(() => {
+    try { return localStorage.getItem('skillsmcp-workspace') || ''; } catch { return ''; }
+  });
+  const wsRef = useRef(activeWsId);
+  wsRef.current = activeWsId;
   const [activeId, setActiveId] = useState('');
   const [tab, setTab] = useState<Tab>('home');
   const [query, setQuery] = useState('');
@@ -56,6 +63,8 @@ export default function App() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [showNewProject, setShowNewProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
+  const [showNewWorkspace, setShowNewWorkspace] = useState(false);
+  const [newWorkspaceName, setNewWorkspaceName] = useState('');
   // bottom sheet for skills (drafts remembered) + projects
   const [skillSheet, setSkillSheet] = useState<{ open: boolean; editing: Skill | null; initial: SkillInput }>({ open: false, editing: null, initial: { ...EMPTY_SKILL } });
   const [projectSheet, setProjectSheet] = useState<{ open: boolean; editing: Project | null; initial: ProjectInput }>({ open: false, editing: null, initial: { ...EMPTY_PROJECT } });
@@ -93,12 +102,36 @@ export default function App() {
 
   const active = useMemo(() => skills.find((s) => s.id === activeId) || null, [skills, activeId]);
   const globals = useMemo(() => skills.filter((s) => s.scope !== 'project'), [skills]);
+  const activeWs: Workspace | null = useMemo(() => {
+    if (workspaces.length === 0) return null;
+    return workspaces.find((w) => w.id === activeWsId)
+      || workspaces.find((w) => w.isMain)
+      || workspaces[0];
+  }, [workspaces, activeWsId]);
+
+  function switchWorkspace(id: string) {
+    const target = id || activeWs?.id || '';
+    setActiveWsId(target);
+    try { localStorage.setItem('skillsmcp-workspace', target); } catch {}
+    setActiveId('');
+    setHomeFilter('all');
+  }
 
   async function refresh(selectId?: string) {
     try {
+      const wsList = (await api.ListWorkspaces()) as Workspace[];
+      setWorkspaces(wsList || []);
+      const wsId = wsRef.current && (wsList || []).some((w) => w.id === wsRef.current)
+        ? wsRef.current
+        : ((wsList || []).find((w) => w.isMain) || (wsList || [])[0])?.id || '';
+      if (wsId && wsId !== wsRef.current) {
+        wsRef.current = wsId;
+        setActiveWsId(wsId);
+        try { localStorage.setItem('skillsmcp-workspace', wsId); } catch {}
+      }
       const [list, projs] = await Promise.all([
-        api.ListSkills() as Promise<Skill[]>,
-        api.ListProjects() as Promise<Project[]>,
+        (api as any).ListSkillsIn(wsId) as Promise<Skill[]>,
+        (api as any).ListProjectsIn(wsId) as Promise<Project[]>,
       ]);
       setSkills(list || []);
       setProjects(projs || []);
@@ -116,6 +149,16 @@ export default function App() {
   }
 
   useEffect(() => { refresh(); }, []);
+  // Live refresh: skills can be created/edited by a separate MCP process
+  // (`SkillsMCP mcp --control`) sharing the same SQLite file. Poll + refresh
+  // on focus so the UI shows them without restarting the app.
+  useEffect(() => {
+    const h = setInterval(() => { refresh().catch(() => {}); }, 3000);
+    const onFocus = () => { refresh().catch(() => {}); };
+    window.addEventListener('focus', onFocus);
+    return () => { clearInterval(h); window.removeEventListener('focus', onFocus); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => { api.Version().then((v: any) => { if (v) setVersion(String(v)); }).catch(() => {}); }, []);
   useEffect(() => { applyAppearance(appearance); }, [appearance]);
   useEffect(() => {
@@ -259,7 +302,7 @@ export default function App() {
   }
 
   function openNewSkill(scope: 'global' | 'project' = 'global', projectId = '') {
-    setSkillSheet({ open: true, editing: null, initial: { ...EMPTY_SKILL, scope, projectId } });
+    setSkillSheet({ open: true, editing: null, initial: { ...EMPTY_SKILL, scope, projectId, workspaceId: activeWs?.id || '' } });
   }
 
   function openSkillSheet(s: Skill) {
@@ -292,10 +335,26 @@ export default function App() {
     URL.revokeObjectURL(a.href);
   }
 
-  async function loadProjCfg(slug: string) {
-    if (projCfg[slug]) return projCfg[slug];
-    const v = String(await api.OpencodeConfigForProject(slug));
-    setProjCfg((c) => ({ ...c, [slug]: v }));
+  // Archive export: active workspace's globals or one project → .zip download.
+  async function exportArchive(scope: 'global' | 'project', projectId = '') {
+    try {
+      const r = (await (api as any).ExportArchive(scope, projectId, wsRef.current)) as { filename: string; base64: string };
+      const bytes = Uint8Array.from(atob(r.base64), (c) => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: 'application/zip' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = r.filename || 'skillsmcp-export.zip';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    }
+  }
+
+  async function loadProjCfg(p: Project) {
+    if (projCfg[p.id]) return projCfg[p.id];
+    const v = String(await (api as any).OpencodeConfigForProjectIn(wsRef.current, p.slug));
+    setProjCfg((c) => ({ ...c, [p.id]: v }));
     return v;
   }
 
@@ -480,9 +539,24 @@ export default function App() {
     if (!name) return;
     try {
       const slug = String(await api.NormalizeSlug(name));
-      await api.CreateProject({ name, slug, description: '', color: '' });
+      await api.CreateProject({ name, slug, description: '', color: '', workspaceId: wsRef.current });
       setNewProjectName('');
       setShowNewProject(false);
+      await refresh();
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    }
+  }
+
+  async function createWorkspaceInline() {
+    const name = newWorkspaceName.trim();
+    if (!name) return;
+    try {
+      const slug = String(await api.NormalizeSlug(name));
+      const ws = (await api.CreateWorkspace({ name, slug, description: '', color: '', gitRemote: '', gitBranch: 'main' })) as Workspace;
+      setNewWorkspaceName('');
+      setShowNewWorkspace(false);
+      switchWorkspace(ws.id);
       await refresh();
     } catch (e: any) {
       setErr(e?.message || String(e));
@@ -493,6 +567,7 @@ export default function App() {
     { id: 'home', label: 'Home', icon: LayoutGrid },
     { id: 'skills', label: 'Skill', icon: BookOpen },
     { id: 'projects', label: 'Projects', icon: FolderKanban },
+    { id: 'workspace', label: 'Workspace', icon: Layers },
     { id: 'mcp', label: 'MCP', icon: Plug2 },
     { id: 'logs', label: 'Logs', icon: ScrollText },
   ];
@@ -517,6 +592,33 @@ export default function App() {
                   <div className="min-w-0 flex-1 truncate text-[13px] font-semibold tracking-tight text-zinc-100">SkillsMCP</div>
                   <Button variant="emerald" title="New skill" onClick={() => openNewSkill()} className="!rounded-lg !px-2 !py-2"><Plus size={15} /></Button>
                 </div>
+                {/* workspace switcher */}
+                <div className="mt-2 flex items-center gap-1.5">
+                  <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: activeWs?.color || '#52525b' }} />
+                  <select value={activeWs?.id || ''} onChange={(e) => switchWorkspace(e.target.value)}
+                    title="Active workspace — each has its own globals, projects, git repo and MCPs"
+                    className="min-w-0 flex-1 cursor-pointer truncate rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[12px] text-zinc-100 outline-none hover:border-zinc-600">
+                    {workspaces.map((w) => (
+                      <option key={w.id} value={w.id}>{w.isMain ? '★ ' : ''}{w.name} · {w.slug}</option>
+                    ))}
+                  </select>
+                  <button onClick={() => setTab('workspace')} title="Workspace settings, git sync, MCPs"
+                    className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-zinc-800 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200">
+                    <Layers size={13} />
+                  </button>
+                </div>
+                {showNewWorkspace ? (
+                  <div className="mt-1.5 flex gap-1.5">
+                    <Input value={newWorkspaceName} onChange={(e) => setNewWorkspaceName(e.target.value)} placeholder="e.g. team-frontend"
+                      onKeyDown={(e) => e.key === 'Enter' && createWorkspaceInline()} className="!py-1.5 text-xs" />
+                    <Button variant="emerald" className="!py-1.5 text-xs" onClick={createWorkspaceInline}>Add</Button>
+                    <Button variant="ghost" className="!py-1.5 text-xs" onClick={() => setShowNewWorkspace(false)}>✕</Button>
+                  </div>
+                ) : (
+                  <button onClick={() => setShowNewWorkspace(true)} className="mt-1.5 w-full rounded-lg border border-dashed border-zinc-800 px-2 py-1.5 text-[11px] text-zinc-500 hover:border-zinc-700 hover:text-zinc-300">
+                    + New workspace — own MCPs + git repo
+                  </button>
+                )}
                 <div className="mt-1.5 flex items-center gap-2">
                   <div className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-500">{enabledCount}/{skills.length} enabled · {globals.filter((s) => s.enabled).length} global</div>
                 </div>
@@ -530,12 +632,14 @@ export default function App() {
               </div>
 
               <div className="flex-1 overflow-y-auto px-2 pb-2">
-                {/* GLOBAL section — drop target for the main MCP */}
+                {/* GLOBAL section — drop target for the workspace-main MCP */}
                 <div {...dropProps('global', false)}
                   className={cn('mb-1 rounded-lg', dropTarget === 'global' && 'bg-emerald-500/10 outline outline-1 outline-emerald-500/40')}>
                   <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-2">
                     <Globe size={11} className="shrink-0 text-emerald-400/80" />
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Global · main MCP</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+                      Global · {activeWs?.isMain ? 'main MCP' : `${activeWs?.slug} MCP`}
+                    </span>
                     <span className="ml-auto font-mono text-[10px] text-zinc-600">
                       {globals.filter((s) => s.enabled).length}/{globals.length}{dropTarget === 'global' ? ' · drop here' : ''}
                     </span>
@@ -620,8 +724,11 @@ export default function App() {
             <div className="ms-auto flex items-center gap-1.5">
               {(tab === 'home' || tab === 'skills') && (
                 <>
-                  <Button variant="outline" className="!py-1.5 text-[11px]" onClick={() => setImportSheet({ open: true, scope: 'global', projectId: '' })} title="Import .md files as skills — global or into a project">
+                  <Button variant="outline" className="!py-1.5 text-[11px]" onClick={() => setImportSheet({ open: true, scope: 'global', projectId: '' })} title="Import .md files or .zip archives as skills — global or into a project">
                     <Upload size={12} /> <span className="hidden min-[1100px]:inline">Import</span>
+                  </Button>
+                  <Button variant="outline" className="!py-1.5 text-[11px]" onClick={() => exportArchive('global')} title="Export global skills as a lossless .zip archive (re-importable)">
+                    <Download size={12} /> <span className="hidden min-[1100px]:inline">Export</span>
                   </Button>
                   <Button variant="outline" className="!py-1.5 text-[11px]" onClick={copyMCP}>
                     {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? 'Copied' : 'MCP config'}
@@ -631,7 +738,7 @@ export default function App() {
               )}
               {tab === 'projects' && (
                 <Button variant="emerald" className="!py-1.5 text-[11px]"
-                  onClick={() => setProjectSheet({ open: true, editing: null, initial: { ...EMPTY_PROJECT } })}>
+                  onClick={() => setProjectSheet({ open: true, editing: null, initial: { ...EMPTY_PROJECT, workspaceId: wsRef.current } })}>
                   <Plus size={12} /> New Project
                 </Button>
               )}
@@ -779,7 +886,7 @@ export default function App() {
                     </div>
                   </div>
                   <Button variant="emerald" className="!py-1.5 text-[11px]"
-                    onClick={() => setProjectSheet({ open: true, editing: null, initial: { ...EMPTY_PROJECT } })}>
+                    onClick={() => setProjectSheet({ open: true, editing: null, initial: { ...EMPTY_PROJECT, workspaceId: wsRef.current } })}>
                     <Plus size={12} /> New Project
                   </Button>
                 </Card>
@@ -826,22 +933,26 @@ export default function App() {
                               <Button variant="emerald" className="!py-1 text-[11px]" onClick={() => openNewSkill('project', p.id)}>
                                 <Plus size={11} /> Skill here
                               </Button>
-                              <Button variant="outline" className="!py-1 text-[11px]" title={`Import .md files into ${p.slug}`}
+                              <Button variant="outline" className="!py-1 text-[11px]" title={`Import .md files or .zip archives into ${p.slug}`}
                                 onClick={() => setImportSheet({ open: true, scope: 'project', projectId: p.id })}>
                                 <Upload size={11} /> Import
                               </Button>
+                              <Button variant="outline" className="!py-1 text-[11px]" title={`Export ${p.slug} skills as a lossless .zip archive (re-importable)`}
+                                onClick={() => exportArchive('project', p.id)}>
+                                <Download size={11} /> Export
+                              </Button>
                               <Button variant="outline" className="!py-1 text-[11px]"
-                                onClick={async () => { const c = await loadProjCfg(p.slug); navigator.clipboard.writeText(c); }}>
+                                onClick={async () => { const c = await loadProjCfg(p); navigator.clipboard.writeText(c); }}>
                                 <Copy size={11} /> MCP config
                               </Button>
                               <Button variant="ghost" className="!py-1 text-[11px]"
-                                onClick={() => setProjectSheet({ open: true, editing: p, initial: { name: p.name, slug: p.slug, description: p.description, color: p.color } })}>
+                                onClick={() => setProjectSheet({ open: true, editing: p, initial: { name: p.name, slug: p.slug, description: p.description, color: p.color, workspaceId: p.workspaceId } })}>
                                 <Pencil size={11} /> Edit
                               </Button>
                               <IconBtn title={`Delete ${p.slug}`} tip="Delete project + its skills" size="sm" className="ml-auto hover:!text-red-300"
                                 onClick={() => setConfirm({
                                   title: `Delete project "${p.name}"?`,
-                                  body: `${pskills.length} project skill(s) will be DELETED with it. Globals are kept. Its MCP skillsmcp-${p.slug} stops working. This cannot be undone.`,
+                                  body: `${pskills.length} project skill(s) will be DELETED with it. Globals are kept. Its MCP stops working. This cannot be undone.`,
                                   confirmLabel: 'Delete project',
                                   action: async () => { await api.DeleteProject(p.id); await refresh(); },
                                 })}>
@@ -850,23 +961,23 @@ export default function App() {
                             </div>
                             <div className="mt-2 flex items-start gap-1.5 rounded-lg border border-zinc-800 bg-zinc-950 p-2 font-mono text-[10px] text-zinc-500">
                               <Globe size={11} className="mt-0.5 shrink-0" />
-                              <span>SkillsMCP mcp --project {p.slug}</span>
+                              <span>{activeWs?.isMain ? `SkillsMCP mcp --project ${p.slug}` : `SkillsMCP mcp --workspace ${activeWs?.slug} --project ${p.slug}`}</span>
                               <button className="ml-auto shrink-0 underline hover:text-zinc-200"
                                 onClick={async () => {
-                                  setProjTest((t) => ({ ...t, [p.slug]: 'testing…' }));
+                                  setProjTest((t) => ({ ...t, [p.id]: 'testing…' }));
                                   try {
-                                    const out = String(await api.TestProjectMCP(p.slug));
-                                    setProjTest((t) => ({ ...t, [p.slug]: out }));
+                                    const out = String(await (api as any).TestProjectMCPIn(wsRef.current, p.slug));
+                                    setProjTest((t) => ({ ...t, [p.id]: out }));
                                   } catch (e: any) {
                                     const msg = 'failed: ' + (e?.message || String(e));
-                                    setProjTest((t) => ({ ...t, [p.slug]: msg }));
+                                    setProjTest((t) => ({ ...t, [p.id]: msg }));
                                   }
                                 }}>
                                 <span className="flex items-center gap-1"><FlaskConical size={10} /> test</span>
                               </button>
                             </div>
-                            {projTest[p.slug] && (
-                              <pre className="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap rounded-lg border border-zinc-800 bg-black/60 p-2 font-mono text-[10px] text-zinc-300">{projTest[p.slug]}</pre>
+                            {projTest[p.id] && (
+                              <pre className="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap rounded-lg border border-zinc-800 bg-black/60 p-2 font-mono text-[10px] text-zinc-300">{projTest[p.id]}</pre>
                             )}
                           </div>
                         </Card>
@@ -877,7 +988,28 @@ export default function App() {
               </div>
             )}
 
-            {tab === 'mcp' && <McpPanel skills={skills} projects={projects} mcpUrl={mcpUrl} />}
+            {tab === 'mcp' && <McpPanel skills={skills} projects={projects} mcpUrl={mcpUrl} workspace={activeWs} workspaceId={activeWs?.id || ''} />}
+
+            {tab === 'workspace' && (
+              activeWs ? (
+                <WorkspacePanel workspace={activeWs} projects={projects} skills={skills}
+                  onChanged={(switchToId) => {
+                    if (typeof switchToId === 'string') {
+                      if (switchToId === '') {
+                        switchWorkspace('');
+                      } else {
+                        switchWorkspace(switchToId);
+                      }
+                    }
+                    refresh();
+                  }}
+                  onError={(m) => setErr(m)} />
+              ) : (
+                <div className="mx-auto grid max-w-6xl gap-3">
+                  <div className="rounded-lg border border-zinc-800 p-4 text-center text-xs text-zinc-500">Loading workspaces…</div>
+                </div>
+              )
+            )}
 
             {tab === 'logs' && (
               <div className="mx-auto grid max-w-5xl gap-3">
@@ -912,15 +1044,17 @@ export default function App() {
 
       <SkillSheet open={skillSheet.open} onClose={() => setSkillSheet((s) => ({ ...s, open: false }))}
         initial={skillSheet.initial} editing={skillSheet.editing} projects={projects}
+        workspaceId={activeWs?.id || ''} workspaceName={activeWs?.name || ''}
         onSaved={(s) => { setActiveId(s.id); refresh(s.id); }} />
 
       <ProjectSheet open={projectSheet.open} onClose={() => setProjectSheet((s) => ({ ...s, open: false }))}
         initial={projectSheet.initial} editing={projectSheet.editing}
+        workspaceId={activeWs?.id || ''} workspaceSlug={activeWs?.slug || ''}
         onSaved={() => refresh()} />
 
       <ImportSheet open={importSheet.open} onClose={() => setImportSheet((s) => ({ ...s, open: false }))}
         initialScope={importSheet.scope} initialProjectId={importSheet.projectId}
-        projects={projects} onImported={() => refresh()} />
+        projects={projects} workspaceId={activeWs?.id || ''} onImported={() => refresh()} />
 
       <ConfirmModal open={!!confirm} title={confirm?.title || ''} body={confirm?.body || ''}
         confirmLabel={confirm?.confirmLabel || 'Confirm'} busy={confirmBusy}

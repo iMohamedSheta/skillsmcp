@@ -14,12 +14,32 @@ export function ClaudeConfig() {
   return window['go']['main']['App']['ClaudeConfig']();
 }
 
+export function ClaudeConfigControl() {
+  return window['go']['main']['App']['ClaudeConfigControl']();
+}
+
 export function ClaudeConfigForProject(arg1) {
   return window['go']['main']['App']['ClaudeConfigForProject'](arg1);
 }
 
+export function ClaudeConfigForProjectIn(arg1, arg2) {
+  return window['go']['main']['App']['ClaudeConfigForProjectIn'](arg1, arg2);
+}
+
+export function ClaudeConfigForWorkspace(arg1) {
+  return window['go']['main']['App']['ClaudeConfigForWorkspace'](arg1);
+}
+
 export function ClearLogs() {
   return window['go']['main']['App']['ClearLogs']();
+}
+
+export function CloneWorkspace(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['CloneWorkspace'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function ControlMCPToolsPreview() {
+  return window['go']['main']['App']['ControlMCPToolsPreview']();
 }
 
 export function CreateProject(arg1) {
@@ -30,6 +50,10 @@ export function CreateSkill(arg1) {
   return window['go']['main']['App']['CreateSkill'](arg1);
 }
 
+export function CreateWorkspace(arg1) {
+  return window['go']['main']['App']['CreateWorkspace'](arg1);
+}
+
 export function DeleteProject(arg1) {
   return window['go']['main']['App']['DeleteProject'](arg1);
 }
@@ -38,8 +62,16 @@ export function DeleteSkill(arg1) {
   return window['go']['main']['App']['DeleteSkill'](arg1);
 }
 
+export function DeleteWorkspace(arg1) {
+  return window['go']['main']['App']['DeleteWorkspace'](arg1);
+}
+
 export function DownloadAndInstallUpdate() {
   return window['go']['main']['App']['DownloadAndInstallUpdate']();
+}
+
+export function ExportArchive(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ExportArchive'](arg1, arg2, arg3);
 }
 
 export function GetDBPath() {
@@ -48,6 +80,10 @@ export function GetDBPath() {
 
 export function GetLogs(arg1) {
   return window['go']['main']['App']['GetLogs'](arg1);
+}
+
+export function GetMainWorkspace() {
+  return window['go']['main']['App']['GetMainWorkspace']();
 }
 
 export function GetSettings() {
@@ -62,12 +98,28 @@ export function GetSkillByID(arg1) {
   return window['go']['main']['App']['GetSkillByID'](arg1);
 }
 
+export function ImportArchive(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ImportArchive'](arg1, arg2, arg3, arg4);
+}
+
 export function ListProjects() {
   return window['go']['main']['App']['ListProjects']();
 }
 
+export function ListProjectsIn(arg1) {
+  return window['go']['main']['App']['ListProjectsIn'](arg1);
+}
+
 export function ListSkills() {
   return window['go']['main']['App']['ListSkills']();
+}
+
+export function ListSkillsIn(arg1) {
+  return window['go']['main']['App']['ListSkillsIn'](arg1);
+}
+
+export function ListWorkspaces() {
+  return window['go']['main']['App']['ListWorkspaces']();
 }
 
 export function LogPath() {
@@ -86,6 +138,10 @@ export function MoveSkill(arg1, arg2, arg3) {
   return window['go']['main']['App']['MoveSkill'](arg1, arg2, arg3);
 }
 
+export function MoveSkillTo(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['MoveSkillTo'](arg1, arg2, arg3, arg4);
+}
+
 export function NormalizeName(arg1) {
   return window['go']['main']['App']['NormalizeName'](arg1);
 }
@@ -102,16 +158,40 @@ export function OpencodeConfig() {
   return window['go']['main']['App']['OpencodeConfig']();
 }
 
+export function OpencodeConfigControl() {
+  return window['go']['main']['App']['OpencodeConfigControl']();
+}
+
 export function OpencodeConfigForProject(arg1) {
   return window['go']['main']['App']['OpencodeConfigForProject'](arg1);
+}
+
+export function OpencodeConfigForProjectIn(arg1, arg2) {
+  return window['go']['main']['App']['OpencodeConfigForProjectIn'](arg1, arg2);
+}
+
+export function OpencodeConfigForWorkspace(arg1) {
+  return window['go']['main']['App']['OpencodeConfigForWorkspace'](arg1);
 }
 
 export function ProjectMCPToolsPreview(arg1) {
   return window['go']['main']['App']['ProjectMCPToolsPreview'](arg1);
 }
 
+export function ProjectMCPToolsPreviewIn(arg1, arg2) {
+  return window['go']['main']['App']['ProjectMCPToolsPreviewIn'](arg1, arg2);
+}
+
 export function ProjectSkillCount(arg1) {
   return window['go']['main']['App']['ProjectSkillCount'](arg1);
+}
+
+export function PullWorkspace(arg1) {
+  return window['go']['main']['App']['PullWorkspace'](arg1);
+}
+
+export function PushWorkspace(arg1) {
+  return window['go']['main']['App']['PushWorkspace'](arg1);
 }
 
 export function ReorderSkills(arg1) {
@@ -126,6 +206,10 @@ export function SetSkillEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetSkillEnabled'](arg1, arg2);
 }
 
+export function SetWorkspaceGit(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SetWorkspaceGit'](arg1, arg2, arg3, arg4);
+}
+
 export function SkipUpdateVersion(arg1) {
   return window['go']['main']['App']['SkipUpdateVersion'](arg1);
 }
@@ -138,12 +222,24 @@ export function StorePath() {
   return window['go']['main']['App']['StorePath']();
 }
 
+export function TestControlMCP() {
+  return window['go']['main']['App']['TestControlMCP']();
+}
+
 export function TestMCP() {
   return window['go']['main']['App']['TestMCP']();
 }
 
 export function TestProjectMCP(arg1) {
   return window['go']['main']['App']['TestProjectMCP'](arg1);
+}
+
+export function TestProjectMCPIn(arg1, arg2) {
+  return window['go']['main']['App']['TestProjectMCPIn'](arg1, arg2);
+}
+
+export function TestWorkspaceMCP(arg1) {
+  return window['go']['main']['App']['TestWorkspaceMCP'](arg1);
 }
 
 export function UpdateProject(arg1, arg2) {
@@ -154,6 +250,22 @@ export function UpdateSkill(arg1, arg2) {
   return window['go']['main']['App']['UpdateSkill'](arg1, arg2);
 }
 
+export function UpdateWorkspace(arg1, arg2) {
+  return window['go']['main']['App']['UpdateWorkspace'](arg1, arg2);
+}
+
 export function Version() {
   return window['go']['main']['App']['Version']();
+}
+
+export function WorkspaceGitStatus(arg1) {
+  return window['go']['main']['App']['WorkspaceGitStatus'](arg1);
+}
+
+export function WorkspaceMCPToolsPreview(arg1) {
+  return window['go']['main']['App']['WorkspaceMCPToolsPreview'](arg1);
+}
+
+export function WorkspaceSkillCount(arg1) {
+  return window['go']['main']['App']['WorkspaceSkillCount'](arg1);
 }

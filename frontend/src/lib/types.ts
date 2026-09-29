@@ -11,6 +11,9 @@ export interface Skill {
   projectId: string;
   projectSlug: string;
   projectName: string;
+  workspaceId: string;
+  workspaceSlug: string;
+  workspaceName: string;
   enabled: boolean;
   sortOrder: number;
   createdAt: string;
@@ -25,6 +28,7 @@ export interface SkillInput {
   tags: string;
   scope: string;
   projectId: string;
+  workspaceId: string;
   enabled: boolean;
 }
 
@@ -34,6 +38,9 @@ export interface Project {
   slug: string;
   description: string;
   color: string;
+  workspaceId: string;
+  workspaceSlug: string;
+  workspaceName: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -43,4 +50,29 @@ export interface ProjectInput {
   slug: string;
   description: string;
   color: string;
+  workspaceId: string;
+}
+
+export interface Workspace {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  color: string;
+  gitRemote: string;
+  gitBranch: string;
+  hasToken: boolean;
+  isMain: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkspaceInput {
+  name: string;
+  slug: string;
+  description: string;
+  color: string;
+  gitRemote: string;
+  gitBranch: string;
+  gitToken?: string;
 }
