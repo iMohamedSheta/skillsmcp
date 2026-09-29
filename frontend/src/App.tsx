@@ -511,13 +511,15 @@ export default function App() {
         {sideOpen && (
           <>
             <aside className="glassbar flex min-h-0 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900/60" style={{ width: sideW }}>
-              <div className="flex items-center gap-2 px-3 pb-2 pt-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg acc-bg acc-on font-mono text-sm font-bold">S</div>
-                <div className="min-w-0">
-                  <div className="truncate text-[13px] font-semibold text-zinc-100">SkillsMCP</div>
-                  <div className="font-mono text-[10px] text-zinc-500">{enabledCount}/{skills.length} enabled · {globals.filter((s) => s.enabled).length} global</div>
+              <div className="px-3 pb-2 pt-3">
+                <div className="flex items-center gap-2">
+                  <img src="/favicon.png" alt="SkillsMCP" className="h-8 w-8 shrink-0 object-contain" />
+                  <div className="min-w-0 flex-1 truncate text-[13px] font-semibold tracking-tight text-zinc-100">SkillsMCP</div>
+                  <Button variant="emerald" title="New skill" onClick={() => openNewSkill()} className="!rounded-lg !px-2 !py-2"><Plus size={15} /></Button>
                 </div>
-                <Button variant="emerald" className="ml-auto !px-2 !py-1 text-[11px]" onClick={() => openNewSkill()}><Plus size={13} /> New</Button>
+                <div className="mt-1.5 flex items-center gap-2">
+                  <div className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-500">{enabledCount}/{skills.length} enabled · {globals.filter((s) => s.enabled).length} global</div>
+                </div>
               </div>
 
               <div className="px-3 pb-2">
