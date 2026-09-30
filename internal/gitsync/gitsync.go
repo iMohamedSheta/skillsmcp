@@ -65,6 +65,10 @@ func defaultTimeout() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 90*time.Second)
 }
 
+// run executes git and returns stdout on success. On failure it returns the
+// combined output for Detail surfaces — or err.Error() when git printed
+// nothing. Callers testing for "unset/empty" MUST check err too: a bare
+// `out == ""` check never matches on failure (it sees "exit status 1").
 func run(ctx context.Context, dir string, args ...string) (string, error) {
 	exe, err := gitExe()
 	if err != nil {
@@ -256,13 +260,28 @@ func EnsureRepo(ctx context.Context, dir, remote, branch string) error {
 		return err
 	}
 	// Local identity fallback (never touches global config).
-	if out, _ := run(ctx, dir, "config", "user.name"); strings.TrimSpace(out) == "" {
+	// NOTE: test the error as well as the output — run() substitutes
+	// err.Error() for empty output on failure, so a bare `out == ""`
+	// check never sees "unset" (it sees "exit status 1" instead) and
+	// the fallback silently never fires on machines without any git
+	// identity configured.
+	if missingIdentity(ctx, dir) {
 		_, _ = run(ctx, dir, "config", "user.name", "SkillsMCP")
-	}
-	if out, _ := run(ctx, dir, "config", "user.email"); strings.TrimSpace(out) == "" {
 		_, _ = run(ctx, dir, "config", "user.email", "skillsmcp@localhost")
 	}
 	return nil
+}
+
+// missingIdentity reports whether git can find no author identity at any
+// config scope, i.e. a commit would fail with "Author identity unknown".
+func missingIdentity(ctx context.Context, dir string) bool {
+	if out, err := run(ctx, dir, "config", "user.name"); err != nil || strings.TrimSpace(out) == "" {
+		return true
+	}
+	if out, err := run(ctx, dir, "config", "user.email"); err != nil || strings.TrimSpace(out) == "" {
+		return true
+	}
+	return false
 }
 
 // writeScope writes one manifest + its readable .md copies.
@@ -373,7 +392,10 @@ func ReadWorkspace(dir string) (WorkspaceFile, *archive.Manifest, map[string]arc
 }
 
 // Commit stages everything and commits when dirty. Returns false when
-// there was nothing to commit.
+// there was nothing to commit. The author's own git identity is preferred;
+// on machines with none configured the app identity is injected per-command
+// (-c never touches any config file), so sync commits never fail with
+// "Author identity unknown" on fresh machines.
 func Commit(ctx context.Context, dir, msg string) (bool, error) {
 	if _, err := run(ctx, dir, "add", "-A"); err != nil {
 		return false, err
@@ -385,7 +407,11 @@ func Commit(ctx context.Context, dir, msg string) (bool, error) {
 	if strings.TrimSpace(out) == "" {
 		return false, nil
 	}
-	if _, err := run(ctx, dir, "commit", "-m", msg); err != nil {
+	args := []string{"commit", "-m", msg}
+	if missingIdentity(ctx, dir) {
+		args = append([]string{"-c", "user.name=SkillsMCP", "-c", "user.email=skillsmcp@localhost"}, args...)
+	}
+	if _, err := run(ctx, dir, args...); err != nil {
 		return false, err
 	}
 	return true, nil
