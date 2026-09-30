@@ -374,7 +374,7 @@ func (s *Server) callControlTool(name string, args map[string]any) (any, error) 
 		}
 		return map[string]any{
 			"project": p.Slug, "workspace": p.WorkspaceSlug, "skills": rows,
-			"hint": fmt.Sprintf("Switch to this project's MCP for full content, then list_skills."),
+			"hint": "Switch to this project's MCP for full content, then list_skills.",
 		}, nil
 	case "create_skill":
 		scope := strings.ToLower(strings.TrimSpace(str("scope")))

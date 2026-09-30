@@ -411,10 +411,7 @@ func (a *App) MCPToolsPreview() string {
 // ControlMCPToolsPreview lists the management MCP tools.
 func (a *App) ControlMCPToolsPreview() string {
 	ctl := mcpserver.NewControl(a.store)
-	names := []string{}
-	for _, t := range ctl.ToolNames() {
-		names = append(names, t)
-	}
+	names := append([]string{}, ctl.ToolNames()...)
 	return strings.Join(names, " · ")
 }
 

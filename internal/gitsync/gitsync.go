@@ -417,11 +417,6 @@ func Commit(ctx context.Context, dir, msg string) (bool, error) {
 	return true, nil
 }
 
-// gitPush pushes the branch to origin (sets upstream).
-func gitPush(ctx context.Context, dir, remote, token, branch string) (string, error) {
-	return gitPushForce(ctx, dir, remote, token, branch, false)
-}
-
 // gitPushForce pushes, optionally with --force (overwrite the remote).
 // Force is the conflict escape hatch for a generated tree: the files are
 // rewritten from the database on every push, so merging remote edits
