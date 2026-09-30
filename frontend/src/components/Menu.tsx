@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Copy, Check, LayoutGrid, BookOpen, FolderKanban, Plug2, Settings2, Minus, Square, X, ScrollText } from 'lucide-react';
+import { Plus, Copy, Check, LayoutGrid, BookOpen, FolderKanban, Plug2, Settings2, Minus, Square, X, ScrollText, GitCompareArrows, Layers } from 'lucide-react';
 import { cn } from '../lib/cn';
 import type { Tab } from './menuTypes';
 
@@ -76,6 +76,8 @@ export default function Menubar({ tab, onTab, onAdd, onCopyMCP, onOpenSettings, 
     { id: 'home', label: 'Home', icon: LayoutGrid },
     { id: 'skills', label: 'Skill', icon: BookOpen },
     { id: 'projects', label: 'Projects', icon: FolderKanban },
+    { id: 'workspace', label: 'Workspace', icon: Layers },
+    { id: 'sync', label: 'Sync', icon: GitCompareArrows },
     { id: 'mcp', label: 'MCP', icon: Plug2 },
     { id: 'logs', label: 'Logs', icon: ScrollText },
   ];

@@ -218,8 +218,10 @@ func (a *App) DeleteWorkspace(id string) error {
 	return a.store.DeleteWorkspace(id)
 }
 
-// SetWorkspaceGit links a workspace to a git remote (empty remote unlinks
-// and drops the token). Token "": keep stored (dropped when remote changes).
+// SetWorkspaceGit links a workspace to a git remote on any host (empty
+// remote unlinks and drops the token). No token is needed when git on this
+// machine is already authenticated; token "": keep stored (dropped when
+// remote changes).
 func (a *App) SetWorkspaceGit(id string, remote string, branch string, token string) (model.Workspace, error) {
 	return a.store.SetWorkspaceGit(id, remote, branch, token)
 }
@@ -235,18 +237,34 @@ func (a *App) WorkspaceGitStatus(id string) string {
 }
 
 // PushWorkspace writes the workspace to its checkout, commits when dirty,
-// and pushes to the linked remote.
-func (a *App) PushWorkspace(id string) map[string]any {
-	res, err := gitsync.Push(a.store, id)
+// and pushes to the linked remote. force overwrites the remote (the fix
+// when the repo has commits you don't have, e.g. a README init).
+func (a *App) PushWorkspace(id string, force bool) map[string]any {
+	res, err := gitsync.Push(a.store, id, force)
 	if err != nil {
-		return map[string]any{"ok": false, "error": err.Error(), "detail": res.Detail}
+		return map[string]any{"ok": false, "error": err.Error(), "detail": res.Detail, "hint": res.Hint, "committed": res.Committed}
 	}
-	return map[string]any{"ok": true, "committed": res.Committed, "pushed": res.Pushed, "skills": res.Skills, "detail": res.Detail}
+	return map[string]any{"ok": true, "committed": res.Committed, "pushed": res.Pushed, "forced": res.Forced, "skills": res.Skills, "detail": res.Detail}
 }
 
 // PullWorkspace fetches the linked remote and restores skills into the workspace.
 func (a *App) PullWorkspace(id string) map[string]any {
 	res, err := gitsync.Pull(a.store, id)
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error(), "hint": res.Hint}
+	}
+	skipped := res.Skipped
+	if skipped == nil {
+		skipped = []string{}
+	}
+	return map[string]any{"ok": true, "imported": res.Imported, "skipped": skipped, "projects": res.Projects, "detail": res.Detail}
+}
+
+// ResetWorkspace discards the checkout, takes the remote branch exactly,
+// and restores it additively (existing names skipped — local-only skills
+// survive). The one-click "remote wins" conflict fix.
+func (a *App) ResetWorkspace(id string) map[string]any {
+	res, err := gitsync.Reset(a.store, id)
 	if err != nil {
 		return map[string]any{"ok": false, "error": err.Error()}
 	}
@@ -257,7 +275,25 @@ func (a *App) PullWorkspace(id string) map[string]any {
 	return map[string]any{"ok": true, "imported": res.Imported, "skipped": skipped, "projects": res.Projects, "detail": res.Detail}
 }
 
-// CloneWorkspace connects a repo (public or private — SSH keys/agent or a
+// GetWorkspaceConflicts compares the app library against the linked repo
+// and returns every part with its change: every skill (local vs remote
+// entry + changed fields), every project meta, workspace.json, and every
+// file (manifests, skills/*.md, unrelated repo files like README init).
+// The UI renders this with our editor for per-skill merges.
+func (a *App) GetWorkspaceConflicts(id string) (gitsync.ConflictsResult, error) {
+	return gitsync.GetConflicts(a.store, id)
+}
+
+// ResolveWorkspaceConflicts applies the user's per-part picks to the DB
+// (keep-local = do nothing, take-remote = overwrite/import, merged =
+// apply the editor's merged entry) and rewrites the checkout files so git
+// status shows exactly what a push will publish.
+func (a *App) ResolveWorkspaceConflicts(id string, req gitsync.ResolveRequest) (gitsync.ResolveResult, error) {
+	return gitsync.Resolve(a.store, id, req.Skills, req.Projects, req.WorkspaceAction, req.WorkspaceMerged)
+}
+
+// CloneWorkspace connects a repo on any host (public or private — system
+// git auth such as SSH keys/agent, credential manager, gh auth; optional
 // token, stored server-side and never shown) as a new workspace.
 func (a *App) CloneWorkspace(name string, slug string, remote string, branch string, token string) (model.Workspace, error) {
 	return gitsync.CloneWorkspace(a.store, name, slug, remote, branch, token)

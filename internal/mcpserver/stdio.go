@@ -172,10 +172,21 @@ func Run(dbPath string, workspaceSlug string, projectSlug string, control bool) 
 			out2, err := srv.callTool(ctx, p.Name, p.Arguments)
 			cancel()
 			if err != nil {
-				write(req.ID, map[string]any{
-					"content": []any{map[string]any{"type": "text", "text": "error: " + err.Error()}},
-					"isError": true,
-				}, nil)
+				// Handlers may return context (detail/hint) alongside the
+				// error — forward it so clients see the full remote message
+				// and the fix, not just the first line.
+				if m, ok := out2.(map[string]any); ok && len(m) > 0 {
+					text, _ := json.MarshalIndent(m, "", "  ")
+					write(req.ID, map[string]any{
+						"content": []any{map[string]any{"type": "text", "text": string(text)}},
+						"isError": true,
+					}, nil)
+				} else {
+					write(req.ID, map[string]any{
+						"content": []any{map[string]any{"type": "text", "text": "error: " + err.Error()}},
+						"isError": true,
+					}, nil)
+				}
 			} else {
 				text, _ := json.MarshalIndent(out2, "", "  ")
 				write(req.ID, map[string]any{

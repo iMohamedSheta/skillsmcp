@@ -89,7 +89,7 @@ the checker at their own repo with `SKILLSMCP_UPDATE_REPO=owner/repo`.
   create projects and workspaces, push/pull git repos, and explain the app
   (`app_help`). Install it alongside the main block — everyday sessions
   stay read-only, management opts in.
-- **Workspaces**: the **Main** workspace is personal (everything above).
+- **Workspaces**: the **Personal** workspace is the default (everything above).
   Extra workspaces hold their own globals + projects, sync to their own
   git repo, and ride their own MCPs (`skillsmcp-<workspace>`,
   `skillsmcp-<workspace>-<project>`). See [Workspaces & git sync](#workspaces--git-sync).
@@ -244,6 +244,7 @@ Control MCP only (`SkillsMCP mcp --control` → `skillsmcp-control`):
 | `set_workspace_git {workspace, remote, branch?, token?}` | Link/unlink a repo (SSH, or HTTPS + private token) |
 | `push_workspace {workspace?}` | Commit + push the workspace to its repo || `pull_workspace {workspace?}` | Pull the repo and restore skills |
 | `workspace_status {workspace?}` | Sync state (branch, clean/dirty, ahead/behind) |
+| `workspace_conflicts {workspace?}` | Compare app vs repo: every skill (local vs remote + changed fields) + every file — merge row by row, then push |
 | `clone_workspace {name, remote, branch?, token?}` | Connect a repo as a workspace + import all |
 
 Most skill/project tools accept an optional `workspace` slug (default main).
@@ -280,7 +281,7 @@ returns the archive manifest JSON, `import_skills` restores it.
 
 ## Workspaces & git sync
 
-One library per context. The **Main** workspace is personal — it is the
+One library per context. The **Personal** workspace is the default — it is the
 library this app had before workspaces existed (same DB, same MCP names,
 existing client configs keep working). Extra workspaces hold their own
 global skills + projects, sync to their own git repo, and expose their
@@ -288,7 +289,7 @@ own MCPs:
 
 ```
 You ──desktop app──▶ skills.db ──MCP──▶ AI agent
-                        ├── Main (personal):  skillsmcp / skillsmcp-<project>
+                        ├── Personal (default): skillsmcp / skillsmcp-<project>
                         └── team (synced):    skillsmcp-team / skillsmcp-team-<project>
                                                     ↕ git push / pull
                                               github.com/org/team-skills (.git)
@@ -298,22 +299,37 @@ You ──desktop app──▶ skills.db ──MCP──▶ AI agent
   Switch with the sidebar selector (remembered per install).
 - **Each workspace**: own globals, own projects (slugs reuse across
   workspaces), own git link, own MCPs. Skill names are unique *per
-  workspace*. Deleting a workspace deletes everything in it (Main is
+  workspace*. Deleting a workspace deletes everything in it (Personal is
   protected).
-- **Link a repo** (Workspace tab, or `set_workspace_git`): any git URL —
-  SSH (`git@github.com:org/skills.git`, uses your keys/agent, no token
-  needed) or HTTPS. For **private HTTPS repos** paste a token (e.g. a
-  GitHub PAT): it is stored locally in `skills.db`, never shown again
-  (reads only report `hasToken`), never written into the repo, and sent
-  per-command as an `AUTHORIZATION: Bearer` header. Empty token keeps the
-  saved one; changing remote without a token drops the old one; unlinking
-  (empty remote) drops it too. Public or private. Empty remote = local-only.
+- **Link a repo** (Sync tab, or `set_workspace_git`): any git URL on any
+  host — SSH (`git@host:org/skills.git`, uses your keys/agent, no token
+  needed) or HTTPS. No token is needed when git on the machine is already
+  authenticated (SSH keys/agent, credential manager, `gh auth`). For
+  **private HTTPS repos** on machines where git itself isn't set up, paste
+  a token (optional): it is stored locally in `skills.db`, never shown
+  again (reads only report `hasToken`), never written into the repo, and
+  sent per-command as an `AUTHORIZATION: Bearer` header — never embedded
+  in the URL. Empty token keeps the saved one; changing remote without a
+  token drops the old one; unlinking (empty remote) drops it too. The
+  linked URL is shown sanitized (`https://***@host/...`) with a show/hide
+  toggle. Public or private. Empty remote = local-only.
 - **Push** writes `workspace.json` + `globals/` + `projects/<slug>/`
   (the lossless archive format: `manifest.json` + readable `.md` files),
   commits when dirty, and pushes to the linked branch. **Pull** fetches
   and restores (missing projects recreated, existing names skipped).
   Manual only — nothing syncs itself. Checkouts live in
   `~/.skillsmcp/workspaces/<slug>/repo`.
+- **Conflicts are resolved in your editor.** A rejected push (e.g. the repo
+  has a README init you don't have) is fixed in the checkout itself:
+  **Sync → Open folder / Editor** opens `~/.skillsmcp/workspaces/<slug>/repo`
+  (VS Code when available, no console flash), merge the conflicted files by
+  hand, then push again. One-click escapes remain: **Force push** overwrites
+  the repo with your library, **Reset to repo** takes the remote exactly and
+  restores additively (local-only skills survive, README-only remotes keep
+  working). Failures show the full remote message plus which fix applies,
+  with secrets redacted.
+  Agents use `workspace_conflicts` (per-skill + per-file compare) and merge
+  with the skill tools, then `push_workspace`.
 - **Connect a repo as a workspace** (`Clone workspace` card, or
   `clone_workspace {name, remote, branch?, token?}`): clones (private repos work
   with your SSH keys or a token) and imports every skill; each
@@ -411,13 +427,19 @@ skillsMCP/
     store/                    # SQLite (skills.db, workspaces table)
     archive/                  # lossless .zip backups (manifest.json + .md)
     gitsync/                  # workspace ↔ git repo push/pull/status/clone
+                              # conflicts.go = app-vs-repo compare (every skill + file) + resolve
+                              # sanitize.go = remote URL + error-output secret redaction
+  open_bindings.go            # Sync tab escape hatch: open folder / editor at the checkout
     mcpserver/                # MCP over stdio + HTTP (dynamic tools)
-                              # control.go = skillsmcp-control write tools (app_help, create_skill…)
+                              # control.go = skillsmcp-control write tools (app_help, create_skill…,
+                              #   workspace_conflicts, push/pull/status…)
     applog/                   # app logs
     version/                  # release tag baked via ldflags
     update/                   # GitHub Releases check + download + self-install
   frontend/src/               # React UI (home, skill sheet, projects, MCP, logs)
     components/UpdateBanner.tsx  # in-app update banner (release notes, progress)
+    components/SyncPanel.tsx     # Sync tab: remote, push/pull/reset, checkout folder+editor
+    lib/sanitize.ts              # remote-URL display sanitizer (mirrors sanitize.go)
   scripts/                    # next-version.ps1, screenshot.ps1 (Windows), screenshot.sh (mac/Linux)
   docs/screenshot-*.png       # app screenshots (README + releases)
 ```

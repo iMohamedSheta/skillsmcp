@@ -633,6 +633,16 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(req.Params, &p)
 		out, err := s.callTool(ctx, p.Name, p.Arguments)
 		if err != nil {
+			// Handlers may return context (detail/hint) alongside the
+			// error — forward it so clients see the full message + fix.
+			if m, ok := out.(map[string]any); ok && len(m) > 0 {
+				text, _ := json.MarshalIndent(m, "", "  ")
+				writeJSON(w, rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
+					"content": []any{map[string]any{"type": "text", "text": string(text)}},
+					"isError": true,
+				}})
+				return
+			}
 			writeJSON(w, rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
 				"content": []any{map[string]any{"type": "text", "text": "error: " + err.Error()}},
 				"isError": true,

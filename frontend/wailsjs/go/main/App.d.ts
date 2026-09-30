@@ -3,6 +3,7 @@
 import {update} from '../models';
 import {model} from '../models';
 import {store} from '../models';
+import {gitsync} from '../models';
 
 export function BinaryName():Promise<string>;
 
@@ -52,6 +53,8 @@ export function GetSkill(arg1:string):Promise<model.Skill>;
 
 export function GetSkillByID(arg1:string):Promise<model.Skill>;
 
+export function GetWorkspaceConflicts(arg1:string):Promise<gitsync.ConflictsResult>;
+
 export function ImportArchive(arg1:string,arg2:string,arg3:string,arg4:string):Promise<Record<string, any>>;
 
 export function ListProjects():Promise<Array<model.Project>>;
@@ -78,6 +81,14 @@ export function NormalizeName(arg1:string):Promise<string>;
 
 export function NormalizeSlug(arg1:string):Promise<string>;
 
+export function OpenCheckoutEditor(arg1:string):Promise<void>;
+
+export function OpenCheckoutFile(arg1:string,arg2:string):Promise<void>;
+
+export function OpenCheckoutFolder(arg1:string):Promise<void>;
+
+export function OpenCheckoutTerminal(arg1:string):Promise<void>;
+
 export function OpenReleasePage(arg1:string):Promise<string>;
 
 export function OpencodeConfig():Promise<string>;
@@ -98,9 +109,13 @@ export function ProjectSkillCount(arg1:string):Promise<number>;
 
 export function PullWorkspace(arg1:string):Promise<Record<string, any>>;
 
-export function PushWorkspace(arg1:string):Promise<Record<string, any>>;
+export function PushWorkspace(arg1:string,arg2:boolean):Promise<Record<string, any>>;
 
 export function ReorderSkills(arg1:Array<string>):Promise<void>;
+
+export function ResetWorkspace(arg1:string):Promise<Record<string, any>>;
+
+export function ResolveWorkspaceConflicts(arg1:string,arg2:gitsync.ResolveRequest):Promise<gitsync.ResolveResult>;
 
 export function SetSetting(arg1:string,arg2:string):Promise<void>;
 
@@ -131,6 +146,8 @@ export function UpdateSkill(arg1:string,arg2:store.SkillInput):Promise<model.Ski
 export function UpdateWorkspace(arg1:string,arg2:store.WorkspaceInput):Promise<model.Workspace>;
 
 export function Version():Promise<string>;
+
+export function WorkspaceCheckoutDir(arg1:string):Promise<string>;
 
 export function WorkspaceGitStatus(arg1:string):Promise<string>;
 

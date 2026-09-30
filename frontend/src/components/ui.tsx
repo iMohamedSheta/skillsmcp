@@ -62,12 +62,13 @@ export function Field({ label, children, hint }: { label: string; children: Reac
   );
 }
 
-export function Empty({ icon, title, hint }: { icon: React.ReactNode; title: string; hint?: string }) {
+export function Empty({ icon, title, hint, children }: { icon: React.ReactNode; title: string; hint?: string; children?: React.ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-800 bg-zinc-900/40 px-6 py-14 text-center">
       <div className="text-zinc-600">{icon}</div>
       <div className="text-sm font-medium text-zinc-300">{title}</div>
       {hint && <div className="max-w-sm text-xs text-zinc-500">{hint}</div>}
+      {children && <div className="mt-2 flex justify-center">{children}</div>}
     </div>
   );
 }

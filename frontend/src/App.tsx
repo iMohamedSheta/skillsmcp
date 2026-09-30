@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   LayoutGrid, BookOpen, FolderKanban, Plus, Search, Plug2, RefreshCw, Trash2, Copy, Check,
-  Upload, Download, Power, ScrollText, Pencil, FlaskConical, Globe, Layers,
+  Upload, Download, Power, ScrollText, Pencil, FlaskConical, Globe, Layers, GitCompareArrows,
   ChevronDown, ChevronRight, FolderPlus,
 } from 'lucide-react';
 import { api, type UpdateInfo } from './lib/api';
@@ -16,6 +16,7 @@ import ImportSheet from './components/ImportSheet';
 import SkillDetail from './components/SkillDetail';
 import ProjectSheet, { EMPTY_PROJECT } from './components/ProjectSheet';
 import WorkspacePanel from './components/WorkspacePanel';
+import SyncPanel from './components/SyncPanel';
 import type { Tab } from './components/menuTypes';
 import { Badge, Button, Card, Empty, IconBtn, Input, ConfirmModal, Tip } from './components/ui';
 import { cn } from './lib/cn';
@@ -65,6 +66,8 @@ export default function App() {
   const [newProjectName, setNewProjectName] = useState('');
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
+  const [wsMenuOpen, setWsMenuOpen] = useState(false);
+  const [wsLoading, setWsLoading] = useState(false);
   // bottom sheet for skills (drafts remembered) + projects
   const [skillSheet, setSkillSheet] = useState<{ open: boolean; editing: Skill | null; initial: SkillInput }>({ open: false, editing: null, initial: { ...EMPTY_SKILL } });
   const [projectSheet, setProjectSheet] = useState<{ open: boolean; editing: Project | null; initial: ProjectInput }>({ open: false, editing: null, initial: { ...EMPTY_PROJECT } });
@@ -111,10 +114,22 @@ export default function App() {
 
   function switchWorkspace(id: string) {
     const target = id || activeWs?.id || '';
+    setWsMenuOpen(false);
+    setShowNewWorkspace(false);
+    if (target && target === wsRef.current) return;
+    // Instant feedback: drop the old workspace's skills NOW so the user
+    // never stares at stale content while the new one loads.
+    wsRef.current = target;
     setActiveWsId(target);
     try { localStorage.setItem('skillsmcp-workspace', target); } catch {}
     setActiveId('');
     setHomeFilter('all');
+    setQuery('');
+    setSkills([]);
+    setProjects([]);
+    setPreview('loading tools…');
+    setWsLoading(true);
+    void refresh();
   }
 
   async function refresh(selectId?: string) {
@@ -145,6 +160,8 @@ export default function App() {
       try { setMcpConfig(String(await api.OpencodeConfig())); } catch {}
     } catch (e: any) {
       setErr(e?.message || String(e));
+    } finally {
+      setWsLoading(false);
     }
   }
 
@@ -557,7 +574,6 @@ export default function App() {
       setNewWorkspaceName('');
       setShowNewWorkspace(false);
       switchWorkspace(ws.id);
-      await refresh();
     } catch (e: any) {
       setErr(e?.message || String(e));
     }
@@ -568,6 +584,7 @@ export default function App() {
     { id: 'skills', label: 'Skill', icon: BookOpen },
     { id: 'projects', label: 'Projects', icon: FolderKanban },
     { id: 'workspace', label: 'Workspace', icon: Layers },
+    { id: 'sync', label: 'Sync', icon: GitCompareArrows },
     { id: 'mcp', label: 'MCP', icon: Plug2 },
     { id: 'logs', label: 'Logs', icon: ScrollText },
   ];
@@ -593,32 +610,67 @@ export default function App() {
                   <Button variant="emerald" title="New skill" onClick={() => openNewSkill()} className="!rounded-lg !px-2 !py-2"><Plus size={15} /></Button>
                 </div>
                 {/* workspace switcher */}
-                <div className="mt-2 flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: activeWs?.color || '#52525b' }} />
-                  <select value={activeWs?.id || ''} onChange={(e) => switchWorkspace(e.target.value)}
+                <div className="relative mt-2">
+                  <button onClick={() => { setWsMenuOpen((v) => !v); setShowNewWorkspace(false); }}
                     title="Active workspace — each has its own globals, projects, git repo and MCPs"
-                    className="min-w-0 flex-1 cursor-pointer truncate rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[12px] text-zinc-100 outline-none hover:border-zinc-600">
-                    {workspaces.map((w) => (
-                      <option key={w.id} value={w.id}>{w.isMain ? '★ ' : ''}{w.name} · {w.slug}</option>
-                    ))}
-                  </select>
-                  <button onClick={() => setTab('workspace')} title="Workspace settings, git sync, MCPs"
-                    className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-zinc-800 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200">
-                    <Layers size={13} />
+                    className={cn('flex w-full items-center gap-2 rounded-xl border bg-zinc-950 px-2.5 py-2 text-left transition',
+                      wsMenuOpen ? 'acc-border border' : 'border-zinc-800 hover:border-zinc-600')}>
+                    <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: activeWs?.color || '#52525b' }} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[12px] font-semibold text-zinc-100">
+                        {activeWs ? (activeWs.isMain ? `★ ${activeWs.name}` : activeWs.name) : '…'}
+                      </span>
+                      <span className="block truncate font-mono text-[10px] text-zinc-500">
+                        {activeWs ? (activeWs.isMain ? 'skillsmcp' : `skillsmcp-${activeWs.slug}`) : 'loading…'}
+                      </span>
+                    </span>
+                    <ChevronDown size={14} className={cn('shrink-0 text-zinc-500 transition-transform', wsMenuOpen && 'rotate-180')} />
                   </button>
+                  {wsMenuOpen && (
+                    <>
+                      <div className="fixed inset-0 z-40 cursor-default" onClick={() => { setWsMenuOpen(false); setShowNewWorkspace(false); }} />
+                      <div className="absolute inset-x-0 top-full z-50 mt-1 overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl shadow-black/60">
+                        <div className="max-h-60 overflow-y-auto p-1">
+                          {workspaces.map((w) => {
+                            const isActive = w.id === activeWs?.id;
+                            return (
+                              <button key={w.id} onClick={() => switchWorkspace(w.id)}
+                                className={cn('flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition',
+                                  isActive ? 'acc-soft acc-text' : 'text-zinc-300 hover:bg-zinc-800')}>
+                                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: w.color || '#52525b' }} />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-[12px] font-medium">
+                                    {w.isMain ? `★ ${w.name}` : w.name}
+                                  </span>
+                                  <span className={cn('block truncate font-mono text-[10px]', isActive ? 'opacity-70' : 'text-zinc-500')}>
+                                    {w.isMain ? 'skillsmcp' : `skillsmcp-${w.slug}`}{w.gitRemote ? ' · linked' : ''}
+                                  </span>
+                                </span>
+                                {isActive && <Check size={14} className="shrink-0" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="border-t border-zinc-800 p-1.5">
+                          {showNewWorkspace ? (
+                            <div className="flex gap-1.5">
+                              <Input value={newWorkspaceName} onChange={(e) => setNewWorkspaceName(e.target.value)}
+                                placeholder="e.g. team-frontend" autoFocus
+                                onKeyDown={(e) => { if (e.key === 'Enter') createWorkspaceInline(); if (e.key === 'Escape') setShowNewWorkspace(false); }}
+                                className="!py-1.5 text-xs" />
+                              <Button variant="emerald" className="!px-2.5 !py-1.5 text-xs" onClick={createWorkspaceInline}>Add</Button>
+                            </div>
+                          ) : (
+                            <button onClick={() => setShowNewWorkspace(true)}
+                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] font-medium text-emerald-300 transition hover:bg-emerald-500/10">
+                              <Plus size={13} /> New workspace…
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
-                {showNewWorkspace ? (
-                  <div className="mt-1.5 flex gap-1.5">
-                    <Input value={newWorkspaceName} onChange={(e) => setNewWorkspaceName(e.target.value)} placeholder="e.g. team-frontend"
-                      onKeyDown={(e) => e.key === 'Enter' && createWorkspaceInline()} className="!py-1.5 text-xs" />
-                    <Button variant="emerald" className="!py-1.5 text-xs" onClick={createWorkspaceInline}>Add</Button>
-                    <Button variant="ghost" className="!py-1.5 text-xs" onClick={() => setShowNewWorkspace(false)}>✕</Button>
-                  </div>
-                ) : (
-                  <button onClick={() => setShowNewWorkspace(true)} className="mt-1.5 w-full rounded-lg border border-dashed border-zinc-800 px-2 py-1.5 text-[11px] text-zinc-500 hover:border-zinc-700 hover:text-zinc-300">
-                    + New workspace — own MCPs + git repo
-                  </button>
-                )}
                 <div className="mt-1.5 flex items-center gap-2">
                   <div className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-500">{enabledCount}/{skills.length} enabled · {globals.filter((s) => s.enabled).length} global</div>
                 </div>
@@ -632,6 +684,18 @@ export default function App() {
               </div>
 
               <div className="flex-1 overflow-y-auto px-2 pb-2">
+                {wsLoading ? (
+                  <div className="grid gap-1.5 p-2" aria-label="Loading workspace">
+                    {[0, 1, 2].map((i) => (
+                      <div key={i} className="animate-pulse rounded-lg border border-zinc-800 bg-zinc-900 p-2.5">
+                        <div className="h-3 w-2/3 rounded bg-zinc-800" />
+                        <div className="mt-1.5 h-2 w-1/2 rounded bg-zinc-800/70" />
+                      </div>
+                    ))}
+                    <div className="p-1 text-center font-mono text-[10px] text-zinc-600">loading {activeWs?.name || 'workspace'}…</div>
+                  </div>
+                ) : (
+                <>
                 {/* GLOBAL section — drop target for the workspace-main MCP */}
                 <div {...dropProps('global', false)}
                   className={cn('mb-1 rounded-lg', dropTarget === 'global' && 'bg-emerald-500/10 outline outline-1 outline-emerald-500/40')}>
@@ -692,6 +756,8 @@ export default function App() {
                       <Button variant="ghost" className="!py-1.5 text-xs" onClick={() => setShowNewProject(false)}>Cancel</Button>
                     </div>
                   </div>
+                )}
+                </>
                 )}
               </div>
 
@@ -793,7 +859,17 @@ export default function App() {
                   })}
                 </div>
 
-                {filtered.length === 0 ? (
+                {wsLoading ? (
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    {[0, 1, 2, 3, 4, 5].map((i) => (
+                      <div key={i} className="animate-pulse rounded-xl border border-zinc-800 bg-zinc-900/80 p-4">
+                        <div className="h-3.5 w-1/2 rounded bg-zinc-800" />
+                        <div className="mt-2 h-2.5 w-3/4 rounded bg-zinc-800/70" />
+                        <div className="mt-1.5 h-2.5 w-2/3 rounded bg-zinc-800/50" />
+                      </div>
+                    ))}
+                  </div>
+                ) : filtered.length === 0 ? (
                   <Empty icon={<BookOpen size={22} />} title="No skills here yet"
                     hint="Create a global skill (main MCP) or a project skill (that project's own MCP) with New Skill." />
                 ) : homeFilter === 'all' ? (
@@ -844,10 +920,9 @@ export default function App() {
               !active ? (
                 <div className="mx-auto grid max-w-5xl gap-3">
                   <Empty icon={<BookOpen size={22} />} title="No skill selected"
-                    hint="Click any skill — here, in the sidebar, or in Projects — to preview it and edit it live." />
-                  <div className="flex justify-center">
+                    hint="Click any skill — here, in the sidebar, or in Projects — to preview it and edit it live.">
                     <Button variant="emerald" onClick={() => openNewSkill()}><Plus size={13} /> New skill (sheet)</Button>
-                  </div>
+                  </Empty>
                 </div>
               ) : (
                 <SkillDetail
@@ -891,7 +966,16 @@ export default function App() {
                   </Button>
                 </Card>
 
-                {projects.length === 0 ? (
+                {wsLoading ? (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {[0, 1].map((i) => (
+                      <div key={i} className="animate-pulse rounded-xl border border-zinc-800 bg-zinc-900/80 p-4">
+                        <div className="h-4 w-1/3 rounded bg-zinc-800" />
+                        <div className="mt-2 h-2.5 w-2/3 rounded bg-zinc-800/70" />
+                      </div>
+                    ))}
+                  </div>
+                ) : projects.length === 0 ? (
                   <Empty icon={<FolderKanban size={22} />} title="No projects yet"
                     hint="Create a project, then add project-scoped skills to it. Its MCP serves globals + its own skills." />
                 ) : (
@@ -993,6 +1077,27 @@ export default function App() {
             {tab === 'workspace' && (
               activeWs ? (
                 <WorkspacePanel workspace={activeWs} projects={projects} skills={skills}
+                  onChanged={(switchToId) => {
+                    if (typeof switchToId === 'string') {
+                      if (switchToId === '') {
+                        switchWorkspace('');
+                      } else {
+                        switchWorkspace(switchToId);
+                      }
+                    }
+                    refresh();
+                  }}
+                  onError={(m) => setErr(m)} />
+              ) : (
+                <div className="mx-auto grid max-w-6xl gap-3">
+                  <div className="rounded-lg border border-zinc-800 p-4 text-center text-xs text-zinc-500">Loading workspaces…</div>
+                </div>
+              )
+            )}
+
+            {tab === 'sync' && (
+              activeWs ? (
+                <SyncPanel workspace={activeWs} skills={skills} projects={projects}
                   onChanged={(switchToId) => {
                     if (typeof switchToId === 'string') {
                       if (switchToId === '') {

@@ -2,7 +2,7 @@
 // workspaces, skills, projects, git sync, archives, or explain the app.
 //
 // Scopes beside this one:
-//   - Main (`SkillsMCP mcp`, skillsmcp): the MAIN workspace's globals.
+//   - Personal (`SkillsMCP mcp`, skillsmcp): the default workspace's globals.
 //   - Project (`SkillsMCP mcp --project <slug>`): main-workspace globals
 //     + that project's skills.
 //   - Workspace (`SkillsMCP mcp --workspace <slug> [--project <pslug>]`):
@@ -173,19 +173,20 @@ func controlToolDefs() []toolDef {
 		},
 		{
 			Name:        "set_workspace_git",
-			Description: "Link a workspace to a git repo (or unlink with an empty remote). SSH URLs use your keys/agent; for private HTTPS repos pass a token (stored server-side, never shown, sent per-command as a header — never written into the repo). Branch defaults to main.",
+			Description: "Link a workspace to a git repo on any host (or unlink with an empty remote). No token needed when git on this machine is already authenticated (SSH keys/agent, credential manager, gh auth). Optional HTTPS token for machines where git isn't set up (stored server-side, never shown, sent per-command as a header — never embedded in the URL or written into the repo). Branch defaults to main.",
 			InputSchema: obj(map[string]any{
 				"workspace": strProp("Workspace slug."),
-				"remote":    strProp("Git remote URL, e.g. git@github.com:org/skills.git. Empty unlinks."),
+				"remote":    strProp("Git remote URL on any host, e.g. git@host:org/skills.git or https://host/org/skills.git. Empty unlinks."),
 				"branch":    strProp("Branch, default main."),
-				"token":     strProp("Private-repo token (e.g. GitHub PAT). Empty keeps the stored one; changing remote without a token drops the old one."),
+				"token":     strProp("Optional HTTPS token for private repos on machines where git isn't authenticated. Empty keeps the stored one; changing remote without a token drops the old one."),
 			}, "workspace"),
 		},
 		{
 			Name:        "push_workspace",
-			Description: "Write the workspace to its checkout, commit when dirty, and push to the linked remote. Manual sync — nothing pushes itself.",
+			Description: "Write the workspace to its checkout, commit when dirty, and push to the linked remote. Manual sync — nothing pushes itself. force overwrites the remote (the fix when the repo has commits you don't have, e.g. a README init).",
 			InputSchema: obj(map[string]any{
 				"workspace": strProp("Workspace slug, default main."),
+				"force":     map[string]any{"type": "boolean", "description": "Overwrite the remote with your library."},
 			}),
 		},
 		{
@@ -203,14 +204,28 @@ func controlToolDefs() []toolDef {
 			}),
 		},
 		{
+			Name:        "workspace_conflicts",
+			Description: "Compare a workspace's app library against its repo files: every skill (app vs repo entry + changed fields: description/content/category/tags/enabled), every project meta, workspace.json, and every file (manifests, skills/*.md, unrelated repo files). Merge with update_skill/create_skill/delete_skill per row, then push_workspace (force when histories diverged).",
+			InputSchema: obj(map[string]any{
+				"workspace": strProp("Workspace slug, default main."),
+			}),
+		},
+		{
+			Name:        "reset_workspace",
+			Description: "Conflict fix, remote wins: discard the checkout, take the remote branch exactly, and restore it additively (existing skill names are skipped, so local-only skills survive). One click, no merging.",
+			InputSchema: obj(map[string]any{
+				"workspace": strProp("Workspace slug, default main."),
+			}),
+		},
+		{
 			Name:        "clone_workspace",
-			Description: "Connect a repo (public or private — SSH keys/agent or a token) as a new workspace and import all its skills. Each project in the repo keeps its own MCP.",
+			Description: "Connect a repo on any host (public or private — system git auth such as SSH keys/agent, credential manager, gh auth; optional HTTPS token) as a new workspace and import all its skills. Each project in the repo keeps its own MCP.",
 			InputSchema: obj(map[string]any{
 				"name":      strProp("Display name for the new workspace."),
 				"slug":      strProp("Optional slug. Derived from the name when omitted."),
-				"remote":    strProp("Git URL to clone, e.g. git@github.com:org/skills.git."),
+				"remote":    strProp("Git URL to clone on any host, e.g. git@host:org/skills.git or https://host/org/skills.git."),
 				"branch":    strProp("Branch, default main."),
-				"token":     strProp("Private-repo token (stored server-side, never shown)."),
+				"token":     strProp("Optional HTTPS token (stored server-side, never shown) for machines where git isn't authenticated."),
 			}, "name", "remote"),
 		},
 	}
@@ -644,7 +659,7 @@ func (s *Server) callControlTool(name string, args map[string]any) (any, error) 
 		}
 		return map[string]any{
 			"workspaces": rows,
-			"hint":       "Main is the personal workspace (`mcp`), others ride `mcp --workspace <slug>` with per-project MCPs. Manage with create/update/delete_workspace, sync with push/pull_workspace.",
+			"hint":       "Personal is the default workspace (`mcp`), others ride `mcp --workspace <slug>` with per-project MCPs. Manage with create/update/delete_workspace, sync with push/pull_workspace.",
 		}, nil
 	case "create_workspace":
 		w, err := s.st.CreateWorkspace(store.WorkspaceInput{
@@ -739,13 +754,18 @@ func (s *Server) callControlTool(name string, args map[string]any) (any, error) 
 		if err != nil {
 			return nil, err
 		}
-		res, err := gitsync.Push(s.st, w.ID)
+		force, _ := args["force"].(bool)
+		res, err := gitsync.Push(s.st, w.ID, force)
 		if err != nil {
-			return map[string]any{"workspace": w.Slug, "error": err.Error(), "detail": res.Detail}, err
+			out := map[string]any{"workspace": w.Slug, "error": err.Error(), "detail": res.Detail, "committed": res.Committed}
+			if res.Hint != "" {
+				out["hint"] = res.Hint
+			}
+			return out, err
 		}
 		return map[string]any{
 			"workspace": w.Slug, "committed": res.Committed, "pushed": res.Pushed,
-			"skills": res.Skills, "hint": res.Detail,
+			"forced": res.Forced, "skills": res.Skills, "hint": res.Detail,
 		}, nil
 	case "pull_workspace":
 		w, err := s.resolveWorkspace(str("workspace"))
@@ -753,6 +773,27 @@ func (s *Server) callControlTool(name string, args map[string]any) (any, error) 
 			return nil, err
 		}
 		res, err := gitsync.Pull(s.st, w.ID)
+		if err != nil {
+			out := map[string]any{"workspace": w.Slug, "error": err.Error()}
+			if res.Hint != "" {
+				out["hint"] = res.Hint
+			}
+			return out, err
+		}
+		skipped := res.Skipped
+		if skipped == nil {
+			skipped = []string{}
+		}
+		return map[string]any{
+			"workspace": w.Slug, "imported": res.Imported, "skipped": skipped,
+			"projects": res.Projects, "hint": res.Detail + " Live now — no restart needed.",
+		}, nil
+	case "reset_workspace":
+		w, err := s.resolveWorkspace(str("workspace"))
+		if err != nil {
+			return nil, err
+		}
+		res, err := gitsync.Reset(s.st, w.ID)
 		if err != nil {
 			return map[string]any{"workspace": w.Slug, "error": err.Error()}, err
 		}
@@ -774,6 +815,50 @@ func (s *Server) callControlTool(name string, args map[string]any) (any, error) 
 			return nil, err
 		}
 		return map[string]any{"workspace": w.Slug, "status": st}, nil
+	case "workspace_conflicts":
+		w, err := s.resolveWorkspace(str("workspace"))
+		if err != nil {
+			return nil, err
+		}
+		conf, err := gitsync.GetConflicts(s.st, w.ID)
+		if err != nil {
+			return map[string]any{"workspace": w.Slug, "error": err.Error()}, err
+		}
+		type skillRow struct {
+			Name          string               `json:"name"`
+			Scope         string               `json:"scope"`
+			Project       string               `json:"project,omitempty"`
+			Kind          string               `json:"kind"`
+			ChangedFields []string             `json:"changedFields"`
+			Local         *archive.SkillEntry  `json:"local,omitempty"`
+			Remote        *archive.SkillEntry  `json:"remote,omitempty"`
+			File          string               `json:"file"`
+		}
+		rows := []skillRow{}
+		for _, sc := range conf.Skills {
+			rows = append(rows, skillRow{
+				Name: sc.Name, Scope: sc.Scope, Project: sc.ProjectSlug,
+				Kind: sc.Kind, ChangedFields: sc.ChangedFields,
+				Local: sc.Local, Remote: sc.Remote, File: sc.LocalFile,
+			})
+		}
+		type fileRow struct {
+			Path   string `json:"path"`
+			Status string `json:"status"`
+			Detail string `json:"detail"`
+		}
+		files := []fileRow{}
+		for _, f := range conf.Files {
+			files = append(files, fileRow{Path: f.Path, Status: f.Status, Detail: f.Detail})
+		}
+		return map[string]any{
+			"workspace": w.Slug, "branch": conf.Branch,
+			"summary":   conf.Detail,
+			"counts":    map[string]any{"local": conf.LocalSkills, "remote": conf.RemoteSkills, "addedLocal": conf.AddedLocal, "addedRemote": conf.AddedRemote, "modified": conf.Modified, "unchanged": conf.Unchanged},
+			"skills":    rows,
+			"files":     files,
+			"hint":      "Merge row by row: kind added-remote → create_skill/import; added-local → keep (push publishes); modified → update_skill with the winning fields (or a hand-merged content). Then push_workspace (force: true when histories diverged). The desktop app shows the same data in Workspace → Compare / resolve with its markdown editor.",
+		}, nil
 	case "clone_workspace":
 		ws, err := gitsync.CloneWorkspace(s.st, str("name"), str("slug"), str("remote"), str("branch"), str("token"))
 		if err != nil {
@@ -811,7 +896,7 @@ func (s *Server) controlLiveHint(sk model.Skill) string {
 func controlHelpText() string {
 	return "SkillsMCP control MCP (skillsmcp-control) — manage the app through me.\n\n" +
 		"WORKSPACES + THE MCPS\n" +
-		"- Main workspace (personal): `SkillsMCP mcp` (skillsmcp) serves its globals;\n" +
+		"- Personal workspace (default): `SkillsMCP mcp` (skillsmcp) serves its globals;\n" +
 		"  each project rides `SkillsMCP mcp --project <slug>` (skillsmcp-<slug>).\n" +
 		"- Other workspaces: `SkillsMCP mcp --workspace <slug>` (skillsmcp-<slug>)\n" +
 		"  and per project `SkillsMCP mcp --workspace <slug> --project <pslug>`.\n" +
@@ -829,9 +914,12 @@ func controlHelpText() string {
 		"  archive — restore it with import_skills {archive}. Duplicates skip.\n" +
 		"- Git sync (manual): set_workspace_git links a repo (SSH keys/agent,\n" +
 		"  or HTTPS + private token stored server-side, never shown),\n" +
-		"  public or private), push_workspace publishes, pull_workspace fetches,\n" +
-		"  workspace_status shows the state. clone_workspace connects a repo as\n" +
-		"  a new workspace and imports everything.\n" +
+		"  push_workspace publishes (force: true overwrites a diverged repo),\n" +
+		"  pull_workspace fetches, workspace_conflicts compares app vs repo\n" +
+		"  skill-by-skill + file-by-file for merging, reset_workspace takes\n" +
+		"  the repo's side with no merging, workspace_status shows the state.\n" +
+		"  clone_workspace connects a repo as a new workspace and imports\n" +
+		"  everything.\n" +
 		"- Everything goes live instantly: tools/list is rebuilt from SQLite on every call.\n" +
 		"- Skill names are unique per workspace, match [a-z0-9-_], max 64 chars,\n" +
 		"  and must not collide with built-in tools.\n\n" +

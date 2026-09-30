@@ -54,7 +54,7 @@ feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
 
 let memWorkspaces: Workspace[] = [
   {
-    id: 'w-main', name: 'Main', slug: 'main',
+    id: 'w-main', name: 'Personal', slug: 'main',
     description: 'Personal workspace.',
     color: '#10b981', gitRemote: '', gitBranch: 'main', hasToken: false, isMain: true,
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -66,7 +66,7 @@ let memProjects: Project[] = [
     id: 'p-demo', name: 'Demo App', slug: 'demo-app',
     description: 'Example project — its MCP serves globals + project skills.',
     color: '#6366f1',
-    workspaceId: 'w-main', workspaceSlug: 'main', workspaceName: 'Main',
+    workspaceId: 'w-main', workspaceSlug: 'main', workspaceName: 'Personal',
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   },
 ];
@@ -80,7 +80,7 @@ let mem: Skill[] = [
     category: 'git',
     tags: 'git,commit,conventional-commits',
     scope: 'global', projectId: '', projectSlug: '', projectName: '',
-    workspaceId: 'w-main', workspaceSlug: 'main', workspaceName: 'Main',
+    workspaceId: 'w-main', workspaceSlug: 'main', workspaceName: 'Personal',
     enabled: true,
     sortOrder: 1,
     createdAt: new Date().toISOString(),
@@ -94,7 +94,7 @@ let mem: Skill[] = [
     category: 'deploy',
     tags: 'demo',
     scope: 'project', projectId: 'p-demo', projectSlug: 'demo-app', projectName: 'Demo App',
-    workspaceId: 'w-main', workspaceSlug: 'main', workspaceName: 'Main',
+    workspaceId: 'w-main', workspaceSlug: 'main', workspaceName: 'Personal',
     enabled: true,
     sortOrder: 2,
     createdAt: new Date().toISOString(),
@@ -285,7 +285,7 @@ export const api = {
     return memWorkspaces[i];
   }),
   DeleteWorkspace: binding('DeleteWorkspace', async (id: string): Promise<void> => {
-    if (memWorkspaces.find((w) => w.id === id)?.isMain) throw new Error('the main workspace cannot be deleted');
+    if (memWorkspaces.find((w) => w.id === id)?.isMain) throw new Error('the Personal workspace cannot be deleted');
     memWorkspaces = memWorkspaces.filter((w) => w.id !== id);
     const pids = new Set(memProjects.filter((p) => p.workspaceId === id).map((p) => p.id));
     memProjects = memProjects.filter((p) => p.workspaceId !== id);
@@ -301,8 +301,27 @@ export const api = {
     return w;
   }),
   WorkspaceGitStatus: binding('WorkspaceGitStatus', async (): Promise<string> => '(web-dev mock) local only'),
-  PushWorkspace: binding('PushWorkspace', async (): Promise<any> => ({ ok: true, detail: '(web-dev mock) pushed' })),
+  PushWorkspace: binding('PushWorkspace', async (_id: string, _force?: boolean): Promise<any> => ({ ok: true, detail: '(web-dev mock) pushed' })),
   PullWorkspace: binding('PullWorkspace', async (): Promise<any> => ({ ok: true, imported: 0, skipped: [], detail: '(web-dev mock) pulled' })),
+  ResetWorkspace: binding('ResetWorkspace', async (): Promise<any> => ({ ok: true, imported: 0, skipped: [], detail: '(web-dev mock) reset to remote' })),
+  GetWorkspaceConflicts: binding('GetWorkspaceConflicts', async (): Promise<any> => ({
+    workspace: 'main', branch: 'main', remote: '(web-dev mock)', fetched: true, hasConflicts: false,
+    localSkills: mem.length, remoteSkills: mem.length, addedLocal: 0, addedRemote: 0, modified: 0, unchanged: mem.length,
+    skills: mem.map((s) => ({
+      name: s.name, scope: s.scope, projectSlug: s.projectSlug, kind: 'unchanged', changedFields: [],
+      local: { name: s.name, description: s.description, content: s.content, category: s.category, tags: s.tags, enabled: s.enabled },
+      remote: { name: s.name, description: s.description, content: s.content, category: s.category, tags: s.tags, enabled: s.enabled },
+      localFile: s.scope === 'project' ? `projects/${s.projectSlug}/skills/${s.name}.md` : `globals/skills/${s.name}.md`,
+      fileStatus: '=', detail: 'Same in your app and the repo.',
+    })),
+    files: [
+      { path: 'workspace.json', status: 'unchanged', kind: 'workspace', detail: 'In sync.' },
+      { path: 'globals/manifest.json', status: 'unchanged', kind: 'manifest', detail: 'In sync.' },
+    ],
+    projects: [], workspaceLocal: { name: 'Personal', slug: 'main', description: '', color: '#10b981' },
+    workspaceChangedFields: [], otherFiles: [], detail: '(web-dev mock) in sync.',
+  })),
+  ResolveWorkspaceConflicts: binding('ResolveWorkspaceConflicts', async (): Promise<any> => ({ updated: 0, created: 0, deleted: 0, skipped: 0, projects: 0, detail: '(web-dev mock) applied' })),
   CloneWorkspace: binding('CloneWorkspace', async (name: string, _slug?: string, _remote?: string, _branch?: string, _token?: string): Promise<Workspace> => {
     const slug = normSlug(name);
     const w: Workspace = { name, slug, description: '', color: '#6366f1', gitRemote: _remote || '', gitBranch: _branch || 'main', hasToken: !!_token, id: rnd(10), isMain: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
@@ -310,6 +329,11 @@ export const api = {
     return w;
   }),
   WorkspaceSkillCount: binding('WorkspaceSkillCount', async (id: string): Promise<number> => mem.filter((s) => s.workspaceId === id).length),
+  WorkspaceCheckoutDir: binding('WorkspaceCheckoutDir', async (): Promise<string> => '(web-dev mock) checkout dir'),
+  OpenCheckoutFolder: binding('OpenCheckoutFolder', async (): Promise<void> => {}),
+  OpenCheckoutTerminal: binding('OpenCheckoutTerminal', async (): Promise<void> => {}),
+  OpenCheckoutEditor: binding('OpenCheckoutEditor', async (): Promise<void> => {}),
+  OpenCheckoutFile: binding('OpenCheckoutFile', async (): Promise<void> => {}),
   MoveSkillTo: binding('MoveSkillTo', async (id: string, scope: string, projectId: string): Promise<Skill> => {
     const s = mem.find((x) => x.id === id);
     if (!s) throw new Error('skill not found');
@@ -334,7 +358,7 @@ export const api = {
   MCPToolsPreview: binding('MCPToolsPreview', async (): Promise<string> =>
     'list_skills · get_skill(name) · list_projects · ' + mem.filter((s) => s.enabled && s.scope === 'global').map((s) => s.name).join(' · ')),
   ControlMCPToolsPreview: binding('ControlMCPToolsPreview', async (): Promise<string> =>
-    'app_help · list_skills · get_skill · list_projects · list_project_skills · create_skill · update_skill · delete_skill · set_skill_enabled · create_project · update_project · delete_project · export_skills · import_skills · list_workspaces · create_workspace · update_workspace · delete_workspace · set_workspace_git · push_workspace · pull_workspace · workspace_status · clone_workspace'),
+    'app_help · list_skills · get_skill · list_projects · list_project_skills · create_skill · update_skill · delete_skill · set_skill_enabled · create_project · update_project · delete_project · export_skills · import_skills · list_workspaces · create_workspace · update_workspace · delete_workspace · set_workspace_git · push_workspace · pull_workspace · workspace_status · workspace_conflicts · reset_workspace · clone_workspace'),
   ProjectMCPToolsPreview: binding('ProjectMCPToolsPreview', async (slug: string): Promise<string> =>
     'list_skills · get_skill(name) · ' + mem.filter((s) => s.enabled && (s.scope === 'global' || s.projectSlug === slug)).map((s) => s.name).join(' · ')),
   WorkspaceMCPToolsPreview: binding('WorkspaceMCPToolsPreview', async (workspaceId: string): Promise<string> =>

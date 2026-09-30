@@ -24,7 +24,7 @@ func TestControlMCP(t *testing.T) {
 		"update_project", "delete_project", "export_skills", "import_skills",
 		"list_workspaces", "create_workspace", "update_workspace", "delete_workspace",
 		"set_workspace_git", "push_workspace", "pull_workspace", "workspace_status",
-		"clone_workspace",
+		"workspace_conflicts", "reset_workspace", "clone_workspace",
 	} {
 		if !names[want] {
 			t.Fatalf("control tools missing %q: %v", want, names)

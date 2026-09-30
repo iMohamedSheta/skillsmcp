@@ -21,6 +21,9 @@ func TestMainWorkspaceSeeded(t *testing.T) {
 	if !ok || w.Slug != "main" || !w.IsMain {
 		t.Fatalf("main workspace = %+v %v", w, ok)
 	}
+	if w.Name != "Personal" {
+		t.Fatalf("default workspace name = %q, want Personal", w.Name)
+	}
 	if len(s.ListWorkspaces()) != 1 {
 		t.Fatal("want exactly the main workspace")
 	}

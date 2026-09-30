@@ -98,6 +98,10 @@ export function GetSkillByID(arg1) {
   return window['go']['main']['App']['GetSkillByID'](arg1);
 }
 
+export function GetWorkspaceConflicts(arg1) {
+  return window['go']['main']['App']['GetWorkspaceConflicts'](arg1);
+}
+
 export function ImportArchive(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ImportArchive'](arg1, arg2, arg3, arg4);
 }
@@ -150,6 +154,22 @@ export function NormalizeSlug(arg1) {
   return window['go']['main']['App']['NormalizeSlug'](arg1);
 }
 
+export function OpenCheckoutEditor(arg1) {
+  return window['go']['main']['App']['OpenCheckoutEditor'](arg1);
+}
+
+export function OpenCheckoutFile(arg1, arg2) {
+  return window['go']['main']['App']['OpenCheckoutFile'](arg1, arg2);
+}
+
+export function OpenCheckoutFolder(arg1) {
+  return window['go']['main']['App']['OpenCheckoutFolder'](arg1);
+}
+
+export function OpenCheckoutTerminal(arg1) {
+  return window['go']['main']['App']['OpenCheckoutTerminal'](arg1);
+}
+
 export function OpenReleasePage(arg1) {
   return window['go']['main']['App']['OpenReleasePage'](arg1);
 }
@@ -190,12 +210,20 @@ export function PullWorkspace(arg1) {
   return window['go']['main']['App']['PullWorkspace'](arg1);
 }
 
-export function PushWorkspace(arg1) {
-  return window['go']['main']['App']['PushWorkspace'](arg1);
+export function PushWorkspace(arg1, arg2) {
+  return window['go']['main']['App']['PushWorkspace'](arg1, arg2);
 }
 
 export function ReorderSkills(arg1) {
   return window['go']['main']['App']['ReorderSkills'](arg1);
+}
+
+export function ResetWorkspace(arg1) {
+  return window['go']['main']['App']['ResetWorkspace'](arg1);
+}
+
+export function ResolveWorkspaceConflicts(arg1, arg2) {
+  return window['go']['main']['App']['ResolveWorkspaceConflicts'](arg1, arg2);
 }
 
 export function SetSetting(arg1, arg2) {
@@ -256,6 +284,10 @@ export function UpdateWorkspace(arg1, arg2) {
 
 export function Version() {
   return window['go']['main']['App']['Version']();
+}
+
+export function WorkspaceCheckoutDir(arg1) {
+  return window['go']['main']['App']['WorkspaceCheckoutDir'](arg1);
 }
 
 export function WorkspaceGitStatus(arg1) {

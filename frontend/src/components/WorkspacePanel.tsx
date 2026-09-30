@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react';
 import {
-  Briefcase, Copy, Check, Pencil, Trash2, Github, ArrowUpToLine, ArrowDownToLine,
-  RefreshCw, FlaskConical, Loader2, Plus, FolderKanban, Globe,
+  Briefcase, Copy, Check, Pencil, Trash2,
+  FlaskConical, Loader2, FolderKanban, Globe,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import type { Project, Skill, Workspace } from '../lib/types';
 import { Badge, Button, Card, Input } from './ui';
-import { cn } from '../lib/cn';
 
-// Workspace tab: edit the workspace, link a git repo + push/pull,
-// see per-workspace MCP commands, connect a repo as a new workspace.
+// Workspace tab: edit the workspace and see per-workspace MCP commands.
+// Git sync lives in the dedicated Sync tab (per-workspace remote, push/pull,
+// conflicts, clone) — this tab stays focused on identity + projects.
 export default function WorkspacePanel({ workspace, projects, skills, onChanged, onError }: {
   workspace: Workspace;
   projects: Project[];
@@ -19,33 +19,15 @@ export default function WorkspacePanel({ workspace, projects, skills, onChanged,
 }) {
   const [edit, setEdit] = useState({ name: workspace.name, slug: workspace.slug, description: workspace.description, color: workspace.color });
   const [saving, setSaving] = useState(false);
-  const [git, setGit] = useState({ remote: workspace.gitRemote || '', branch: workspace.gitBranch || 'main', token: '' });
-  const [gitSaving, setGitSaving] = useState(false);
-  const [gitBusy, setGitBusy] = useState<'push' | 'pull' | null>(null);
-  const [gitOut, setGitOut] = useState('');
-  const [status, setStatus] = useState('loading…');
-  const [clone, setClone] = useState({ name: '', remote: '', branch: 'main', token: '' });
-  const [cloneBusy, setCloneBusy] = useState(false);
   const [copied, setCopied] = useState('');
   const [projOut, setProjOut] = useState<Record<string, string>>({});
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     setEdit({ name: workspace.name, slug: workspace.slug, description: workspace.description, color: workspace.color });
-    setGit((g) => ({ remote: workspace.gitRemote || '', branch: workspace.gitBranch || 'main', token: '' }));
-    setGitOut('');
     setConfirmDelete(false);
-    reloadStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.id]);
-
-  async function reloadStatus() {
-    try {
-      setStatus(String(await (api as any).WorkspaceGitStatus(workspace.id)));
-    } catch {
-      setStatus('status unavailable');
-    }
-  }
 
   async function copy(text: string, key: string) {
     try {
@@ -75,64 +57,6 @@ export default function WorkspacePanel({ workspace, projects, skills, onChanged,
       onError(e?.message || String(e));
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function saveGit() {
-    setGitSaving(true);
-    try {
-      await api.SetWorkspaceGit(workspace.id, git.remote.trim(), git.branch.trim() || 'main', git.token.trim());
-      setGit((g) => ({ ...g, token: '' }));
-      onChanged();
-      reloadStatus();
-    } catch (e: any) {
-      onError(e?.message || String(e));
-    } finally {
-      setGitSaving(false);
-    }
-  }
-
-  async function doPush() {
-    setGitBusy('push');
-    setGitOut('');
-    try {
-      const r = (await (api as any).PushWorkspace(workspace.id)) as any;
-      setGitOut(r?.ok ? `✓ ${r.detail || 'pushed'}` : `failed: ${r?.error || r?.detail || 'unknown'}`);
-      onChanged();
-      reloadStatus();
-    } catch (e: any) {
-      setGitOut('failed: ' + (e?.message || String(e)));
-    } finally {
-      setGitBusy(null);
-    }
-  }
-
-  async function doPull() {
-    setGitBusy('pull');
-    setGitOut('');
-    try {
-      const r = (await (api as any).PullWorkspace(workspace.id)) as any;
-      setGitOut(r?.ok ? `✓ ${r.detail || 'pulled'}` : `failed: ${r?.error || 'unknown'}`);
-      onChanged();
-      reloadStatus();
-    } catch (e: any) {
-      setGitOut('failed: ' + (e?.message || String(e)));
-    } finally {
-      setGitBusy(null);
-    }
-  }
-
-  async function doClone() {
-    if (!clone.name.trim() || !clone.remote.trim()) return;
-    setCloneBusy(true);
-    try {
-      const ws = (await (api as any).CloneWorkspace(clone.name.trim(), '', clone.remote.trim(), clone.branch.trim() || 'main', clone.token.trim())) as Workspace;
-      setClone({ name: '', remote: '', branch: 'main', token: '' });
-      onChanged(ws.id);
-    } catch (e: any) {
-      onError(e?.message || String(e));
-    } finally {
-      setCloneBusy(false);
     }
   }
 
@@ -172,8 +96,11 @@ export default function WorkspacePanel({ workspace, projects, skills, onChanged,
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[15px] font-semibold text-white">{workspace.name}</span>
             {workspace.isMain
-              ? <Badge tone="green">main · personal</Badge>
+              ? <Badge tone="green">personal · default</Badge>
               : <Badge tone="indigo">skillsmcp-{workspace.slug}</Badge>}
+            {workspace.gitRemote
+              ? <Badge tone="green">sync linked — see Sync tab</Badge>
+              : <Badge tone="zinc">local only — link a repo in Sync</Badge>}
           </div>
           <div className="mt-0.5 font-mono text-[11px] text-zinc-500">
             {globals.filter((s) => s.enabled).length}/{globals.length} global · {projects.length} project(s) · <code className="text-zinc-300">{wsCommand()}</code>
@@ -194,48 +121,6 @@ export default function WorkspacePanel({ workspace, projects, skills, onChanged,
       {projOut.__ws && (
         <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-lg border border-zinc-800 bg-black/60 p-2.5 font-mono text-[10px] text-zinc-300">{projOut.__ws}</pre>
       )}
-
-      {/* git sync */}
-      <Card className="p-4">
-        <div className="mb-1 flex items-center gap-1.5 text-[13px] font-semibold text-zinc-100">
-          <Github size={14} className="text-zinc-400" /> Git sync — push to / pull from GitHub or any repo
-        </div>
-        <div className="mb-2.5 text-[11px] leading-relaxed text-zinc-500">
-          Manual sync, nothing pushes itself. SSH URLs (<code className="font-mono">git@github.com:org/repo.git</code>) use your keys/agent —
-          no token needed. For <span className="text-zinc-300">private HTTPS repos</span> paste a token (e.g. GitHub PAT): it is stored
-          locally, never shown again, never written into the repo, and sent per-command as a header.
-          Leave blank to keep the saved one; changing remote without a token drops the old one.
-          Layout on disk: <code className="font-mono">workspace.json</code> + <code className="font-mono">globals/</code> + <code className="font-mono">projects/&lt;slug&gt;/</code> (same lossless format as Export).
-        </div>
-        <div className="grid gap-2 md:grid-cols-[1fr_160px]">
-          <Input value={git.remote} onChange={(e) => setGit((g) => ({ ...g, remote: e.target.value }))} placeholder="git@github.com:org/skills.git  (empty = local only)" spellCheck={false} className="font-mono !text-[12px]" />
-          <Input value={git.branch} onChange={(e) => setGit((g) => ({ ...g, branch: e.target.value }))} placeholder="main" spellCheck={false} className="font-mono !text-[12px]" />
-        </div>
-        <div className="mt-2 grid gap-2 md:grid-cols-[1fr_auto]">
-          <div className="relative">
-            <Input value={git.token} onChange={(e) => setGit((g) => ({ ...g, token: e.target.value }))} placeholder={workspace.hasToken ? '•••••• token saved — leave blank to keep' : 'Token for private HTTPS repos (optional)'} spellCheck={false} type="password" className="font-mono !text-[12px]" />
-          </div>
-          <div className="flex items-center gap-1.5">
-            {workspace.hasToken && <Badge tone="green">token saved</Badge>}
-          </div>
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <Button variant="outline" className="!py-1.5 text-[11px]" onClick={saveGit} disabled={gitSaving}>
-            {gitSaving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} Link repo
-          </Button>
-          <Button variant="emerald" className="!py-1.5 text-[11px]" onClick={doPush} disabled={gitBusy !== null || !workspace.gitRemote}>
-            {gitBusy === 'push' ? <Loader2 size={12} className="animate-spin" /> : <ArrowUpToLine size={12} />} Push
-          </Button>
-          <Button variant="outline" className="!py-1.5 text-[11px]" onClick={doPull} disabled={gitBusy !== null || !workspace.gitRemote}>
-            {gitBusy === 'pull' ? <Loader2 size={12} className="animate-spin" /> : <ArrowDownToLine size={12} />} Pull
-          </Button>
-          <button onClick={reloadStatus} className="ml-auto flex items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-200">
-            <RefreshCw size={11} /> status
-          </button>
-        </div>
-        <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-2 font-mono text-[11px] text-zinc-400">{status}</div>
-        {gitOut && <div className="mt-1.5 whitespace-pre-wrap font-mono text-[11px] text-zinc-300">{gitOut}</div>}
-      </Card>
 
       {/* projects + their MCPs */}
       <Card className="p-4">
@@ -283,29 +168,6 @@ export default function WorkspacePanel({ workspace, projects, skills, onChanged,
         )}
       </Card>
 
-      {/* connect a repo as a new workspace */}
-      <Card className="p-4">
-        <div className="mb-1 flex items-center gap-1.5 text-[13px] font-semibold text-zinc-100">
-          <Plus size={14} className="text-emerald-300" /> Connect a repo as a new workspace
-        </div>
-        <div className="mb-2 text-[11px] text-zinc-500">
-          Clones a public or private repo and imports every skill (SSH/agent or token below). Each project inside keeps its own MCP.
-        </div>
-        <div className="grid gap-2 md:grid-cols-[200px_1fr_140px]">
-          <Input value={clone.name} onChange={(e) => setClone((c) => ({ ...c, name: e.target.value }))} placeholder="Workspace name" />
-          <Input value={clone.remote} onChange={(e) => setClone((c) => ({ ...c, remote: e.target.value }))} placeholder="git@github.com:org/skills.git" spellCheck={false} className="font-mono !text-[12px]" />
-          <Input value={clone.branch} onChange={(e) => setClone((c) => ({ ...c, branch: e.target.value }))} placeholder="main" spellCheck={false} className="font-mono !text-[12px]" />
-        </div>
-        <div className="mt-2">
-          <Input value={clone.token} onChange={(e) => setClone((c) => ({ ...c, token: e.target.value }))} placeholder="Token for private HTTPS repos (optional, stored, never shown)" spellCheck={false} type="password" className="font-mono !text-[12px]" />
-        </div>
-        <div className="mt-2">
-          <Button variant="emerald" className="!py-1.5 text-[11px]" onClick={doClone} disabled={cloneBusy || !clone.name.trim() || !clone.remote.trim()}>
-            {cloneBusy ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />} Clone & import
-          </Button>
-        </div>
-      </Card>
-
       {/* edit + danger */}
       <Card className="p-4">
         <div className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold text-zinc-100">
@@ -341,7 +203,7 @@ export default function WorkspacePanel({ workspace, projects, skills, onChanged,
         </div>
         {workspace.isMain && (
           <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-zinc-600">
-            <Globe size={11} /> The main workspace is personal and cannot be deleted.
+            <Globe size={11} /> The Personal workspace is the default and cannot be deleted.
           </div>
         )}
       </Card>

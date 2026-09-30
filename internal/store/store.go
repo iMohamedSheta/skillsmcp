@@ -168,6 +168,8 @@ func (s *Store) migrate() error {
 		_, _ = s.db.Exec(col)
 	}
 	mainID := s.seedMainWorkspace()
+	// The default workspace is called Personal (older installs seeded "Main").
+	_, _ = s.db.Exec(`UPDATE workspaces SET name='Personal' WHERE is_main=1 AND name='Main'`)
 	// Backfill every pre-workspace row into the main (personal) workspace.
 	_, _ = s.db.Exec(`UPDATE skills SET workspace_id=? WHERE workspace_id IS NULL OR workspace_id=''`, mainID)
 	_, _ = s.db.Exec(`UPDATE projects SET workspace_id=? WHERE workspace_id IS NULL OR workspace_id=''`, mainID)
@@ -274,7 +276,7 @@ func (s *Store) seedMainWorkspace() string {
 	now := Now()
 	_, _ = s.db.Exec(`INSERT INTO workspaces(id,name,slug,description,color,git_remote,git_branch,is_main,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		id, "Main", "main", "Personal workspace — this install's original library.", "#10b981", "", "main", 1, now, now)
+		id, "Personal", "main", "Personal workspace — this install's original library.", "#10b981", "", "main", 1, now, now)
 	return id
 }
 
@@ -291,7 +293,8 @@ var reserved = map[string]bool{
 	"list_workspaces": true, "create_workspace": true, "update_workspace": true,
 	"delete_workspace": true, "set_workspace_git": true,
 	"push_workspace": true, "pull_workspace": true, "workspace_status": true,
-	"clone_workspace": true,
+	"workspace_conflicts": true,
+	"clone_workspace": true, "reset_workspace": true,
 	"initialize": true, "ping": true,
 }
 
@@ -1310,7 +1313,7 @@ func (s *Store) DeleteWorkspace(id string) error {
 		return fmt.Errorf("workspace not found")
 	}
 	if isMain == 1 {
-		return fmt.Errorf("the main workspace cannot be deleted")
+		return fmt.Errorf("the Personal workspace cannot be deleted")
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
